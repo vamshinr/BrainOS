@@ -563,21 +563,106 @@ def ask_brainos(req: QueryRequest):
     }
 
 
+def _fetch_vllm_prometheus() -> dict:
+    """
+    Fetch raw Prometheus metrics from vLLM and parse the key gauges/counters.
+    vLLM exposes /metrics at the base URL (strip /v1).
+    Returns an empty dict if the endpoint is unreachable.
+    """
+    import urllib.request
+    import re
+
+    base = vllm_url.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    metrics_url = f"{base}/metrics"
+
+    try:
+        with urllib.request.urlopen(metrics_url, timeout=3) as resp:
+            text = resp.read().decode("utf-8")
+    except Exception:
+        return {}
+
+    parsed: dict = {}
+    for line in text.splitlines():
+        if line.startswith("#"):
+            continue
+        m = re.match(r'^(\S+?)(?:\{[^}]*\})?\s+([\d.e+\-]+)', line)
+        if m:
+            key, val = m.group(1), m.group(2)
+            try:
+                parsed[key] = float(val)
+            except ValueError:
+                pass
+    return parsed
+
+
 @app.get("/api/metrics")
 def get_metrics():
-    """AMD GPU showcase metrics panel."""
+    """Live AMD MI300X + ChromaDB metrics panel."""
     brain = _read_brain()
+    prom = _fetch_vllm_prometheus()
+
+    # vLLM Prometheus key names (vary slightly across versions, try both forms)
+    def _g(*keys: str, default: float | None = None):
+        for k in keys:
+            if k in prom:
+                return prom[k]
+        return default
+
+    # Compute average e2e latency from histogram sum/count
+    lat_sum = _g("vllm:e2e_request_latency_seconds_sum", default=0.0)
+    lat_cnt = _g("vllm:e2e_request_latency_seconds_count", default=0.0)
+    avg_latency_s = (lat_sum / lat_cnt) if lat_cnt and lat_cnt > 0 else None
+
     return {
-        "chroma_units": collection.count(),
-        "brain_sources": len(brain.get("sources", [])),
-        "brain_entities": len(brain.get("entities", [])),
-        "brain_units": len(brain.get("units", [])),
-        "model": MODEL_NAME,
-        "vlm_model": VLM_MODEL_NAME,
-        "gpu_backend": "AMD MI300X",
-        "vllm_endpoint": vllm_url,
-        "vlm_endpoint": vlm_url,
-        "embedding_model": os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
+        # GPU / vLLM live stats
+        "gpu": {
+            "backend": "AMD MI300X",
+            "model": MODEL_NAME,
+            "vllm_endpoint": vllm_url,
+            # Throughput
+            "tokens_per_sec_generation": _g(
+                "vllm:avg_generation_throughput_toks_per_s",
+                "vllm:generation_tokens_total",
+            ),
+            "tokens_per_sec_prompt": _g(
+                "vllm:avg_prompt_throughput_toks_per_s",
+                "vllm:prompt_tokens_total",
+            ),
+            # Queue
+            "requests_running": _g("vllm:num_requests_running", default=0),
+            "requests_waiting": _g("vllm:num_requests_waiting", default=0),
+            # GPU KV-cache
+            "gpu_cache_usage_pct": _g("vllm:gpu_cache_usage_perc"),
+            "cpu_cache_usage_pct": _g("vllm:cpu_cache_usage_perc"),
+            # Latency
+            "avg_e2e_latency_s": avg_latency_s,
+            "total_requests_finished": _g(
+                "vllm:request_success_total",
+                "vllm:num_requests_success",
+                default=0,
+            ),
+            # Raw Prometheus available?
+            "prometheus_reachable": bool(prom),
+        },
+        # Embedding / RAG
+        "rag": {
+            "embedding_model": os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
+            "chroma_units": collection.count(),
+        },
+        # Knowledge base
+        "knowledge": {
+            "sources": len(brain.get("sources", [])),
+            "entities": len(brain.get("entities", [])),
+            "units": len(brain.get("units", [])),
+            "stale_units": sum(1 for u in brain.get("units", []) if u.get("stale") or u.get("supersededBy")),
+        },
+        # VLM
+        "vlm": {
+            "model": VLM_MODEL_NAME,
+            "endpoint": vlm_url,
+        },
     }
 
 
