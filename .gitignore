@@ -238,3 +238,6 @@ data/*.json
 
 # AI Agent Settings
 .claude/
+AGENTS.md
+CLAUDE.md
+company_brain_architecture.svg
