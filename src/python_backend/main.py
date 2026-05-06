@@ -15,6 +15,7 @@ import uvicorn
 from openai import OpenAI
 from dotenv import load_dotenv
 import chromadb
+from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 
 load_dotenv()
@@ -48,7 +49,10 @@ BRAIN_JSON = os.path.join(DATA_DIR, "brain.json")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # ── ChromaDB with sentence-transformers embeddings (runs on CPU, ~90 MB model) ─
-chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
+chroma_client = chromadb.PersistentClient(
+    path=CHROMA_PATH,
+    settings=Settings(anonymized_telemetry=False),
+)
 embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
     model_name=os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 )
@@ -664,6 +668,23 @@ def get_metrics():
             "endpoint": vlm_url,
         },
     }
+
+
+@app.delete("/api/clear")
+def clear_all():
+    """Delete and recreate the ChromaDB collection, then wipe brain.json."""
+    global collection
+    try:
+        chroma_client.delete_collection("brainos_knowledge")
+    except Exception:
+        pass
+    collection = chroma_client.get_or_create_collection(
+        name="brainos_knowledge",
+        embedding_function=embedding_fn,
+        metadata={"hnsw:space": "cosine"},
+    )
+    _write_brain({"sources": [], "entities": [], "units": []})
+    return {"ok": True, "cleared": True}
 
 
 if __name__ == "__main__":

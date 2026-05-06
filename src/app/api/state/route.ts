@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { readState, clearAll, deleteUnit } from "@/lib/store";
+import { readState, clearAll, deleteUnit, invalidateCache } from "@/lib/store";
 
 export const runtime = "nodejs";
 
@@ -11,13 +11,37 @@ export async function GET() {
 export async function DELETE(req: Request) {
   const url = new URL(req.url);
   const unitId = url.searchParams.get("unit");
+
   if (unitId) {
     const next = await deleteUnit(unitId);
     return NextResponse.json({ ok: true, units: next.units.length });
   }
+
   if (url.searchParams.get("all") === "true") {
+    // Clear Python backend first — wipes ChromaDB collection and brain.json
+    try {
+      const backendRes = await fetch("http://localhost:8081/api/clear", {
+        method: "DELETE",
+      });
+      if (!backendRes.ok) {
+        const errText = await backendRes.text();
+        console.warn("Backend clear failed:", errText);
+      }
+    } catch (e) {
+      // Backend may be down; fall through to clear brain.json locally
+      console.warn("Could not reach backend for clear:", e);
+    }
+
+    // Also clear via the store so the Next.js cache and brain.json are in sync
+    // even if the Python backend was unreachable above.
     await clearAll();
+    invalidateCache();
+
     return NextResponse.json({ ok: true, cleared: true });
   }
-  return NextResponse.json({ error: "specify ?unit=<id> or ?all=true" }, { status: 400 });
+
+  return NextResponse.json(
+    { error: "specify ?unit=<id> or ?all=true" },
+    { status: 400 },
+  );
 }

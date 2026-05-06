@@ -1,30 +1,15 @@
 import { SEED_SOURCES } from "@/lib/seed-data";
-import {
-  extractFromSource,
-  ingestSourceShape,
-  mergeIntoState,
-  reconcileUnit,
-} from "@/lib/extractor";
-import { mutate } from "@/lib/store";
-import { hasGatewayCreds } from "@/lib/ai";
+import { invalidateCache } from "@/lib/store";
 
 export const runtime = "nodejs";
 export const maxDuration = 600;
 
 export async function POST() {
-  if (!hasGatewayCreds()) {
-    return new Response(
-      JSON.stringify({ error: "No AI credentials configured." }),
-      { status: 400, headers: { "Content-Type": "application/json" } },
-    );
-  }
-
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (event: Record<string, unknown>) => {
+      const send = (event: Record<string, unknown>) =>
         controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
-      };
 
       send({ type: "start", total: SEED_SOURCES.length });
 
@@ -35,46 +20,44 @@ export async function POST() {
         const seed = SEED_SOURCES[i];
         send({ type: "source:start", index: i, title: seed.title, kind: seed.kind });
 
-        const source = ingestSourceShape(seed);
-        let extraction;
         try {
-          extraction = await extractFromSource(source);
-        } catch (e) {
-          send({ type: "source:error", index: i, error: String(e) });
-          continue;
-        }
+          // Route through the Python backend so extraction runs on the 70B model
+          // on the AMD MI300X and embeddings land in ChromaDB.
+          const res = await fetch("http://localhost:8081/api/ingest", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              kind: seed.kind,
+              title: seed.title,
+              content: seed.content,
+              url: seed.url,
+            }),
+          });
 
-        await mutate(async (state) => {
-          const reconciliations = new Map<
-            string,
-            { supersedes: string[]; isDuplicate: boolean }
-          >();
-          for (const u of extraction.units) {
-            try {
-              const r = await reconcileUnit(u, state.units);
-              reconciliations.set(u.id, r);
-            } catch {
-              reconciliations.set(u.id, { supersedes: [], isDuplicate: false });
-            }
+          if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Backend ${res.status}: ${errText}`);
           }
-          return mergeIntoState(
-            state,
-            source,
-            extraction.entities,
-            extraction.units,
-            reconciliations,
-          );
-        });
 
-        totalUnits += extraction.units.length;
-        totalEntities += extraction.entities.length;
-        send({
-          type: "source:done",
-          index: i,
-          title: seed.title,
-          units: extraction.units.length,
-          entities: extraction.entities.length,
-        });
+          const data = await res.json();
+
+          // Invalidate the Next.js cache after every write so the dashboard
+          // always reflects the state Python just persisted to brain.json.
+          invalidateCache();
+
+          totalUnits += data.units_stored ?? 0;
+          totalEntities += data.entities_stored ?? 0;
+
+          send({
+            type: "source:done",
+            index: i,
+            title: seed.title,
+            units: data.units_stored ?? 0,
+            entities: data.entities_stored ?? 0,
+          });
+        } catch (e) {
+          send({ type: "source:error", index: i, title: seed.title, error: String(e) });
+        }
       }
 
       send({ type: "done", totalUnits, totalEntities });
