@@ -11,7 +11,14 @@ const SUGGESTIONS = [
   "When is the Adyen sunset?",
 ];
 
-type Answer = { question: string; answer: string; used: string[] };
+type Feedback = { confidence: number; grounded: boolean; feedback: string };
+type Answer = {
+  question: string;
+  answer: string;
+  used: string[];
+  latency_ms: number | null;
+  feedback: Feedback | null;
+};
 
 export default function AskPage() {
   const [question, setQuestion] = useState("");
@@ -30,7 +37,16 @@ export default function AskPage() {
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
-      setHistory((h) => [{ question: q, answer: j.answer, used: j.used }, ...h]);
+      setHistory((h) => [
+        {
+          question: q,
+          answer: j.answer,
+          used: j.used ?? [],
+          latency_ms: j.latency_ms ?? null,
+          feedback: j.feedback ?? null,
+        },
+        ...h,
+      ]);
       setQuestion("");
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));
@@ -44,19 +60,13 @@ export default function AskPage() {
       <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
         Ask
       </div>
-      <h1 className="text-3xl font-semibold tracking-tight">
-        Query the brain.
-      </h1>
+      <h1 className="text-3xl font-semibold tracking-tight">Query the brain.</h1>
       <p className="mt-2 text-[var(--muted-foreground)]">
-        Answers are grounded only in extracted knowledge units, with citation
-        IDs.
+        Answers are grounded in ChromaDB-retrieved knowledge units from the AMD MI300X 70B model.
       </p>
 
       <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (question.trim()) ask(question.trim());
-        }}
+        onSubmit={(e) => { e.preventDefault(); if (question.trim()) ask(question.trim()); }}
         className="mt-6 flex gap-2"
       >
         <input
@@ -71,7 +81,7 @@ export default function AskPage() {
           disabled={loading || !question.trim()}
           className="rounded-md bg-[var(--foreground)] text-[var(--background)] px-4 py-2 text-sm font-medium disabled:opacity-50"
         >
-          {loading ? "Thinking…" : "Ask"}
+          {loading ? "Retrieving…" : "Ask"}
         </button>
       </form>
 
@@ -96,24 +106,53 @@ export default function AskPage() {
 
       <div className="mt-8 space-y-6">
         {history.map((h, i) => (
-          <div
-            key={i}
-            className="rounded-lg border bg-[var(--card)] px-5 py-4"
-          >
+          <div key={i} className="rounded-lg border bg-[var(--card)] px-5 py-4">
             <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-1">
               Question
             </div>
             <div className="text-sm font-medium">{h.question}</div>
+
             <div className="mt-4 text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-1">
               Answer
             </div>
-            <div className="text-sm leading-relaxed whitespace-pre-wrap">
-              {h.answer}
+            <div className="text-sm leading-relaxed whitespace-pre-wrap">{h.answer}</div>
+
+            {/* Metadata row */}
+            <div className="mt-4 flex flex-wrap items-center gap-3 text-[11px] text-[var(--muted-foreground)]">
+              {h.latency_ms !== null && (
+                <span className="rounded bg-[var(--muted)]/40 px-2 py-0.5 font-mono">
+                  {h.latency_ms} ms · AMD MI300X
+                </span>
+              )}
+              {h.used.length > 0 && (
+                <span>
+                  Retrieved {h.used.length} unit{h.used.length !== 1 ? "s" : ""}
+                </span>
+              )}
+              {h.feedback && (
+                <span
+                  className={`rounded px-2 py-0.5 ${
+                    h.feedback.grounded
+                      ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+                      : "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                  }`}
+                >
+                  {h.feedback.grounded ? "Grounded" : "Ungrounded"} ·{" "}
+                  conf {h.feedback.confidence.toFixed(2)}
+                </span>
+              )}
             </div>
+
+            {h.feedback?.feedback && (
+              <div className="mt-2 text-[11px] text-[var(--muted-foreground)] italic">
+                {h.feedback.feedback}
+              </div>
+            )}
+
             {h.used.length > 0 && (
-              <div className="mt-3 text-[11px] text-[var(--muted-foreground)]">
-                Cited units: {h.used.slice(0, 8).join(", ")}
-                {h.used.length > 8 && ` +${h.used.length - 8} more`}
+              <div className="mt-2 text-[11px] text-[var(--muted-foreground)]">
+                Unit IDs: {h.used.slice(0, 6).join(", ")}
+                {h.used.length > 6 && ` +${h.used.length - 6} more`}
               </div>
             )}
           </div>
