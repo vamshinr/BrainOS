@@ -11,13 +11,11 @@ load_dotenv()
 
 app = FastAPI(title="BrainOS Multi-Agent Backend")
 
-# We use an OpenAI compatible client. 
-# For local testing, it defaults to OpenAI API if OPENAI_API_KEY is present.
-# When moving to MI300X, we will change base_url to the vLLM endpoint.
-vllm_url = os.getenv("VLLM_API_BASE")
+# We use an OpenAI compatible client pointing to the AMD MI300X vLLM instance.
+vllm_url = os.getenv("VLLM_API_BASE", "http://134.199.204.211:8000/v1")
 client = OpenAI(
-    base_url=vllm_url if vllm_url else None,
-    api_key=os.getenv("OPENAI_API_KEY", "") # Need dummy key if using vLLM without auth
+    base_url=vllm_url,
+    api_key=os.getenv("OPENAI_API_KEY", "not-required") # Dummy key for vLLM
 )
 
 # Dummy Agent classes for structure
@@ -35,12 +33,9 @@ class StructuringAgent:
 class ExecutionAgent:
     def execute(self, query: str):
         # In a real scenario, this retrieves from vector DB, then asks the LLM
-        if not os.getenv("OPENAI_API_KEY") and not vllm_url:
-            return "Local LLM not configured. Please set OPENAI_API_KEY or VLLM_API_BASE."
-        
         try:
             response = client.chat.completions.create(
-                model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
+                model=os.getenv("MODEL_NAME", "amd/Llama-3.1-70B-Instruct-FP8-KV"),
                 messages=[
                     {"role": "system", "content": "You are the BrainOS execution agent. You answer questions based on company knowledge."},
                     {"role": "user", "content": query}
