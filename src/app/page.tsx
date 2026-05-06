@@ -43,7 +43,7 @@ export default async function Home() {
     <div className="px-10 py-10 max-w-6xl">
       <header className="mb-10">
         <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
-          Company Brain
+          Brain OS
         </div>
         <h1 className="text-4xl font-semibold tracking-tight">
           The layer between scattered company knowledge and AI agents.

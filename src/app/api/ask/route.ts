@@ -29,13 +29,6 @@ function score(unit: KnowledgeUnit, query: string): number {
 }
 
 export async function POST(req: Request) {
-  if (!hasGatewayCreds()) {
-    return NextResponse.json(
-      { error: "No AI credentials configured." },
-      { status: 400 },
-    );
-  }
-
   let body;
   try {
     body = Body.parse(await req.json());
@@ -43,38 +36,28 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid body", detail: String(e) }, { status: 400 });
   }
 
-  const state = await readState();
-  const fresh = state.units.filter((u) => !u.stale && !u.supersededBy);
-  const ranked = fresh
-    .map((u) => ({ u, s: score(u, body.question) }))
-    .filter((x) => x.s > 0)
-    .sort((a, b) => b.s - a.s)
-    .slice(0, 30)
-    .map((x) => x.u);
+  try {
+    // Forward the request to the Python Multi-Agent Backend
+    const backendRes = await fetch("http://localhost:8081/api/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: body.question })
+    });
 
-  // if nothing matched, give the model the top items by recency anyway
-  const context = ranked.length > 0 ? ranked : fresh.slice(0, 30);
+    if (!backendRes.ok) {
+      const errText = await backendRes.text();
+      throw new Error(`Backend returned ${backendRes.status}: ${errText}`);
+    }
 
-  const contextBlock = context
-    .map(
-      (u) =>
-        `[${u.id}] (${u.kind}, conf=${u.confidence.toFixed(2)}) ${u.statement}`,
-    )
-    .join("\n");
+    const data = await backendRes.json();
 
-  const { text } = await generateText({
-    model: model(),
-    system: `You answer questions using ONLY the company knowledge units provided. Each unit has an ID in [brackets].
-Rules:
-- Cite the IDs you used in square brackets at the end of relevant sentences, e.g. "[abc123]".
-- If the knowledge units do not contain the answer, say so plainly. Do not guess.
-- Be terse. Two or three sentences is usually enough.
-- If multiple units conflict, prefer the higher-confidence one and note the conflict.`,
-    prompt: `KNOWLEDGE UNITS:
-${contextBlock || "(none)"}
-
-QUESTION: ${body.question}`,
-  });
-
-  return NextResponse.json({ answer: text, used: context.map((u) => u.id) });
+    // Return what the Next.js frontend expects
+    return NextResponse.json({
+      answer: data.answer,
+      used: [] // We can populate this later when we integrate ChromaDB citations
+    });
+  } catch (e) {
+    console.error("Agent Backend Error:", e);
+    return NextResponse.json({ error: "Agent Backend failed", detail: String(e) }, { status: 500 });
+  }
 }

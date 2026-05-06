@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Company Brain",
+  title: "Brain OS",
   description:
     "A living map of how a company actually works — extracted from Slack, email, tickets, docs, and meetings into executable knowledge for AI agents.",
 };
