@@ -229,16 +229,13 @@ class StructuringAgent:
             return {"superseded_ids": [], "is_duplicate": False}
 
         try:
+            # Query without a where filter to avoid ChromaDB errors when no docs
+            # match the compound condition. We post-filter by kind and source_id.
             results = collection.query(
                 query_texts=[new_unit["statement"]],
-                n_results=min(4, total),
-                where={"$and": [
-                    {"kind": {"$eq": new_unit["kind"]}},
-                    {"source_id": {"$ne": source_id}},
-                ]},
+                n_results=min(6, total),
             )
         except Exception:
-            # ChromaDB where filter requires at least 1 matching doc; ignore gracefully
             return {"superseded_ids": [], "is_duplicate": False}
 
         ids = results["ids"][0] if results["ids"] else []
@@ -246,11 +243,14 @@ class StructuringAgent:
         docs = results["documents"][0] if results["documents"] else []
         metas = results["metadatas"][0] if results["metadatas"] else []
 
-        # Cosine distance < 0.15 → similarity > 0.85 → worth classifying
+        # Post-filter: same kind, different source, cosine distance < 0.15
         candidates = [
             {"id": cid, "statement": doc, "subject": m.get("subject", ""), "distance": dist}
             for cid, dist, doc, m in zip(ids, distances, docs, metas)
-            if dist < 0.15 and cid != new_uid
+            if dist < 0.15
+            and cid != new_uid
+            and m.get("source_id") != source_id
+            and m.get("kind") == new_unit["kind"]
         ]
 
         if not candidates:

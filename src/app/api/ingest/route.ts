@@ -44,6 +44,7 @@ export async function POST(req: Request) {
       sourceId: data.source_id,
       addedUnits: data.units_stored ?? 0,
       addedEntities: data.entities_stored ?? 0,
+      supersededUnits: data.units_superseded ?? 0,
       totals,
     });
   } catch (e) {
