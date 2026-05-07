@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 import chromadb
 from chromadb.config import Settings
 from chromadb.utils import embedding_functions
+from chromadb.api.types import Documents, Embeddings
 
 load_dotenv()
 
@@ -32,13 +33,51 @@ app.add_middleware(
 
 # ── LLM clients (OpenAI-compatible, pointed at AMD MI300X via vLLM) ────────────
 vllm_url = os.getenv("VLLM_API_BASE", "http://134.199.204.211:8000/v1")
-vlm_url = os.getenv("VLM_API_BASE", vllm_url)  # separate VLM endpoint or same
+vlm_url = os.getenv("VLM_API_BASE", vllm_url)
 
 llm_client = OpenAI(base_url=vllm_url, api_key=os.getenv("OPENAI_API_KEY", "not-required"))
 vlm_client = OpenAI(base_url=vlm_url, api_key=os.getenv("OPENAI_API_KEY", "not-required"))
 
-MODEL_NAME = os.getenv("MODEL_NAME", "amd/Llama-3.1-70B-Instruct-FP8-KV")
-VLM_MODEL_NAME = os.getenv("VLM_MODEL_NAME", "llava-hf/llava-v1.6-mistral-7b-hf")
+
+def _resolve_model(client: OpenAI, env_name: str, env_value: str) -> str:
+    """
+    Verify the configured model name exists on the vLLM endpoint.
+    If not, auto-select the first available model and warn.
+    This prevents silent 0-unit extractions from a wrong model name.
+    """
+    try:
+        available = [m.id for m in client.models.list().data]
+    except Exception as e:
+        print(f"[BrainOS] WARNING: could not list models from {client.base_url}: {e}")
+        return env_value
+
+    if not available:
+        print(f"[BrainOS] WARNING: vLLM returned no models at {client.base_url}")
+        return env_value
+
+    if env_value in available:
+        print(f"[BrainOS] {env_name}={env_value} ✓")
+        return env_value
+
+    # Configured name not found — auto-use the first served model
+    auto = available[0]
+    print(
+        f"[BrainOS] WARNING: {env_name}='{env_value}' not found on vLLM.\n"
+        f"  Available: {available}\n"
+        f"  Auto-selecting: '{auto}'\n"
+        f"  Fix: set {env_name}={auto} in .env"
+    )
+    return auto
+
+
+# _model_env = os.getenv("MODEL_NAME", "amd/Llama-3.1-70B-Instruct-FP8-KV")
+# _vlm_model_env = os.getenv("VLM_MODEL_NAME", "llava-hf/llava-v1.6-mistral-7b-hf")
+
+_model_env = os.getenv("MODEL_NAME", "llava-hf/llava-v1.6-mistral-7b-hf")
+_vlm_model_env = os.getenv("VLM_MODEL_NAME", "llava-hf/llava-v1.6-mistral-7b-hf")
+
+MODEL_NAME = _resolve_model(llm_client, "MODEL_NAME", _model_env)
+VLM_MODEL_NAME = _resolve_model(vlm_client, "VLM_MODEL_NAME", _vlm_model_env)
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 _project_root = os.path.abspath(
@@ -49,13 +88,54 @@ CHROMA_PATH = os.path.join(DATA_DIR, "chroma_db")
 BRAIN_JSON = os.path.join(DATA_DIR, "brain.json")
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# ── ChromaDB with sentence-transformers embeddings (runs on CPU, ~90 MB model) ─
+# ── Embedding backend selection ────────────────────────────────────────────────
+# If EMBEDDING_API_BASE is set → embeddings run on the AMD MI300X GPU via vLLM.
+# Otherwise → sentence-transformers runs locally on CPU (~90 MB model).
+#
+# To enable GPU embeddings:
+#   vllm serve BAAI/bge-large-en-v1.5 --task embed --port 8002
+#   Then set EMBEDDING_API_BASE=http://<host>:8002/v1 in .env
+#
+# WARNING: switching backends changes vector dimensions. Run /api/clear first
+# to rebuild the collection with the new embedding model.
+
+_embed_api_base = os.getenv("EMBEDDING_API_BASE")
+_embed_model = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+
+
+class VLLMEmbeddingFunction:
+    """
+    Calls vLLM's OpenAI-compatible /v1/embeddings endpoint on the AMD MI300X GPU.
+    Requires a dedicated embedding model served via vLLM (e.g. BAAI/bge-large-en-v1.5).
+    """
+    def __init__(self, base_url: str, model: str, api_key: str = "not-required"):
+        self._client = OpenAI(base_url=base_url, api_key=api_key)
+        self._model = model
+
+    def __call__(self, input: Documents) -> Embeddings:
+        texts = [t if isinstance(t, str) else t.decode("utf-8", errors="replace") for t in input]
+        response = self._client.embeddings.create(model=self._model, input=texts)
+        return [e.embedding for e in response.data]
+
+
+if _embed_api_base:
+    embedding_fn = VLLMEmbeddingFunction(
+        base_url=_embed_api_base,
+        model=_embed_model,
+        api_key=os.getenv("OPENAI_API_KEY", "not-required"),
+    )
+    EMBEDDING_BACKEND = f"GPU · vLLM · {_embed_model}"
+else:
+    embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+        model_name=_embed_model
+    )
+    EMBEDDING_BACKEND = f"CPU · sentence-transformers · {_embed_model}"
+
+print(f"[BrainOS] Embedding backend: {EMBEDDING_BACKEND}")
+
 chroma_client = chromadb.PersistentClient(
     path=CHROMA_PATH,
     settings=Settings(anonymized_telemetry=False),
-)
-embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name=os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 )
 collection = chroma_client.get_or_create_collection(
     name="brainos_knowledge",
@@ -78,13 +158,14 @@ def _write_brain(state: dict):
         with open(BRAIN_JSON, "w") as f:
             json.dump(state, f, indent=2)
 
-# ── Extraction system prompt (mirrors extractor.ts logic, runs on 70B model) ──
+# ── Extraction system prompt ───────────────────────────────────────────────────
 EXTRACTION_SYSTEM = """You are the extraction layer of a Company Brain AI system.
 Turn raw company knowledge into structured, atomic, executable data.
 
-Extract exactly two things:
+Extract exactly THREE things:
 1. ENTITIES — every named person, team, system, product, tool, customer, or concept.
 2. KNOWLEDGE UNITS — atomic self-contained statements. Each must be independently understandable.
+3. RELATIONSHIPS — directed edges that form the company knowledge graph.
 
 Unit kinds:
   fact        – static info ("The billing API is on AWS us-east-1")
@@ -95,11 +176,15 @@ Unit kinds:
   policy      – a rule to follow ("All PRs need 2 reviewers")
   gotcha      – non-obvious tribal knowledge ("Webhook handler silently drops if signature header missing")
 
+Relationship verbs (use exactly these):
+  owns | uses | requires | governs | manages | integrates-with | reports-to | defines | depends-on | replaces
+
 Quality rules:
 - Each unit captures ONE thing only. Split compound statements.
 - Use full entity names, never pronouns.
 - evidence_quote must be a literal substring from the source text.
 - confidence: 1.0=clearly stated, 0.7=strongly implied, 0.4=speculative. Omit below 0.4.
+- Relationships must connect two entities that both appear in the entities list.
 - Skip pleasantries, scheduling, off-topic chatter.
 
 Return ONLY valid JSON — no markdown, no explanation:
@@ -116,6 +201,9 @@ Return ONLY valid JSON — no markdown, no explanation:
       "evidence_quote": "string",
       "confidence": 0.0
     }
+  ],
+  "relationships": [
+    {"from": "entity_name", "relation": "verb", "to": "entity_name", "confidence": 0.0}
   ]
 }"""
 
@@ -300,6 +388,7 @@ class StructuringAgent:
         source: dict,
         units: list,
         entities: list,
+        relationships: list | None = None,
     ) -> dict:
         now = datetime.datetime.utcnow().isoformat() + "Z"
 
@@ -380,17 +469,53 @@ class StructuringAgent:
 
         brain["units"] = stored_units + brain["units"]
         brain["sources"].insert(0, source)
+
+        # ── Step 5: merge relationships into brain graph ───────────────────
+        if not isinstance(brain.get("relationships"), list):
+            brain["relationships"] = []
+
+        new_rels = []
+        first_unit_id = stored_units[0]["id"] if stored_units else "unknown"
+        for r in (relationships or []):
+            frm = r.get("from", "").strip()
+            to = r.get("to", "").strip()
+            rel = r.get("relation", "").strip()
+            conf = float(r.get("confidence", 0.7))
+            if not (frm and to and rel):
+                continue
+            # Deduplicate: skip if identical edge already in brain
+            duplicate = any(
+                x["from"] == frm and x["to"] == to and x["relation"] == rel
+                for x in brain["relationships"]
+            )
+            if duplicate:
+                continue
+            edge = {
+                "id": str(uuid.uuid4())[:8],
+                "from": frm,
+                "relation": rel,
+                "to": to,
+                "unitId": first_unit_id,
+                "sourceId": source_id,
+                "confidence": conf,
+                "createdAt": now,
+            }
+            brain["relationships"].insert(0, edge)
+            new_rels.append(edge)
+
         _write_brain(brain)
 
         return {
             "units_stored": len(stored_units),
             "units_superseded": superseded_count,
             "entities_stored": len(new_entities),
+            "relationships_stored": len(new_rels),
             "chroma_total": collection.count(),
             "brain_totals": {
                 "sources": len(brain["sources"]),
                 "entities": len(brain["entities"]),
                 "units": len(brain["units"]),
+                "relationships": len(brain["relationships"]),
             },
         }
 
@@ -525,11 +650,16 @@ class IngestRequest(BaseModel):
 
 @app.get("/health")
 def health_check():
+    try:
+        available_models = [m.id for m in llm_client.models.list().data]
+    except Exception:
+        available_models = []
     return {
         "status": "ok",
         "gpu_backend": "AMD MI300X via vLLM",
         "model": MODEL_NAME,
         "vlm_model": VLM_MODEL_NAME,
+        "available_models": available_models,
         "chroma_units": collection.count(),
         "brain_json": os.path.exists(BRAIN_JSON),
     }
@@ -556,6 +686,7 @@ def ingest_text(req: IngestRequest):
         source=source,
         units=extraction.get("units", []),
         entities=extraction.get("entities", []),
+        relationships=extraction.get("relationships", []),
     )
 
     return {
@@ -563,6 +694,7 @@ def ingest_text(req: IngestRequest):
         "source_id": source_id,
         "units_extracted": len(extraction.get("units", [])),
         "entities_extracted": len(extraction.get("entities", [])),
+        "relationships_extracted": len(extraction.get("relationships", [])),
         **result,
     }
 
@@ -629,6 +761,7 @@ async def ingest_file(
         source=source,
         units=extraction.get("units", []),
         entities=extraction.get("entities", []),
+        relationships=extraction.get("relationships", []),
     )
 
     return {
@@ -637,6 +770,7 @@ async def ingest_file(
         "source_id": source_id,
         "units_extracted": len(extraction.get("units", [])),
         "entities_extracted": len(extraction.get("entities", [])),
+        "relationships_extracted": len(extraction.get("relationships", [])),
         **result,
     }
 
@@ -684,6 +818,7 @@ async def ingest_image(
         source=source,
         units=extraction.get("units", []),
         entities=extraction.get("entities", []),
+        relationships=extraction.get("relationships", []),
     )
 
     return {
@@ -692,6 +827,7 @@ async def ingest_image(
         "source_id": source_id,
         "units_extracted": len(extraction.get("units", [])),
         "entities_extracted": len(extraction.get("entities", [])),
+        "relationships_extracted": len(extraction.get("relationships", [])),
         **result,
     }
 
@@ -709,15 +845,16 @@ def ingest_mock():
     total_units, total_entities = 0, 0
     for item in items:
         source_id = item.get("id", str(uuid.uuid4())[:8])
+        item_title = item.get("title") or item.get("id", "Mock Source")
         extraction = ingest_agent.extract_from_text(
             source_type=item.get("source_type", "other"),
-            title=item.get("id", "Mock Source"),
+            title=item_title,
             content=item.get("content", ""),
         )
         source = {
             "id": source_id,
             "kind": item.get("source_type", "other"),
-            "title": item.get("id", "Mock Source"),
+            "title": item_title,
             "content": item.get("content", ""),
             "capturedAt": item.get("timestamp", datetime.datetime.utcnow().isoformat() + "Z"),
         }
@@ -782,9 +919,11 @@ def _fetch_vllm_prometheus() -> dict:
             continue
         m = re.match(r'^(\S+?)(?:\{[^}]*\})?\s+([\d.e+\-]+)', line)
         if m:
-            key, val = m.group(1), m.group(2)
+            key, val_str = m.group(1), m.group(2)
             try:
-                parsed[key] = float(val)
+                # Accumulate labeled variants (e.g. request_success_total{reason="stop"}
+                # and request_success_total{reason="abort"} both roll into one key).
+                parsed[key] = parsed.get(key, 0.0) + float(val_str)
             except ValueError:
                 pass
     return parsed
@@ -841,7 +980,8 @@ def get_metrics():
         },
         # Embedding / RAG
         "rag": {
-            "embedding_model": os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
+            "embedding_backend": EMBEDDING_BACKEND,
+            "embedding_model": _embed_model,
             "chroma_units": collection.count(),
         },
         # Knowledge base
@@ -849,6 +989,7 @@ def get_metrics():
             "sources": len(brain.get("sources", [])),
             "entities": len(brain.get("entities", [])),
             "units": len(brain.get("units", [])),
+            "relationships": len(brain.get("relationships", [])),
             "stale_units": sum(1 for u in brain.get("units", []) if u.get("stale") or u.get("supersededBy")),
         },
         # VLM
@@ -857,6 +998,20 @@ def get_metrics():
             "endpoint": vlm_url,
         },
     }
+
+
+@app.delete("/api/units/{unit_id}")
+def delete_unit(unit_id: str):
+    """Remove a single unit from ChromaDB and brain.json."""
+    try:
+        collection.delete(ids=[unit_id])
+    except Exception as e:
+        print(f"[delete_unit] ChromaDB delete skipped: {e}")
+
+    brain = _read_brain()
+    brain["units"] = [u for u in brain["units"] if u["id"] != unit_id]
+    _write_brain(brain)
+    return {"ok": True, "unit_id": unit_id}
 
 
 @app.delete("/api/clear")

@@ -55,10 +55,11 @@ export default async function Home() {
 
       {/* No cloud credentials needed — all AI runs on the AMD MI300X via the Python backend */}
 
-      <section className="grid grid-cols-4 gap-3 mb-8">
+      <section className="grid grid-cols-5 gap-3 mb-8">
         <Stat label="Sources" value={state.sources.length} />
         <Stat label="Entities" value={state.entities.length} />
-        <Stat label="Knowledge units" value={fresh.length} accent />
+        <Stat label="Relationships" value={(state.relationships ?? []).length} accent />
+        <Stat label="Knowledge units" value={fresh.length} />
         <Stat
           label="Superseded"
           value={state.units.length - fresh.length}

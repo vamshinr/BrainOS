@@ -13,7 +13,16 @@ export async function DELETE(req: Request) {
   const unitId = url.searchParams.get("unit");
 
   if (unitId) {
+    // Remove from ChromaDB first so the vector doesn't linger in semantic search
+    try {
+      await fetch(`http://localhost:8081/api/units/${encodeURIComponent(unitId)}`, {
+        method: "DELETE",
+      });
+    } catch {
+      // Backend may be down — still remove from brain.json
+    }
     const next = await deleteUnit(unitId);
+    invalidateCache();
     return NextResponse.json({ ok: true, units: next.units.length });
   }
 

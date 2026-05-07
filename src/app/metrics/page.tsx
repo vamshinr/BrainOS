@@ -19,6 +19,7 @@ type GpuMetrics = {
 };
 
 type RagMetrics = {
+  embedding_backend: string;
   embedding_model: string;
   chroma_units: number;
 };
@@ -346,8 +347,10 @@ export default function MetricsPage() {
               />
             </div>
             <div className="mt-3 text-[11px] text-[var(--muted-foreground)]">
-              Embedding model:{" "}
-              <span className="font-mono">{snapshot.rag.embedding_model}</span>
+              Embedding:{" "}
+              <span className={`font-mono ${snapshot.rag.embedding_backend.startsWith("GPU") ? "text-emerald-600 dark:text-emerald-400" : ""}`}>
+                {snapshot.rag.embedding_backend}
+              </span>
               {" · "}
               {snapshot.knowledge.entities} entities ·{" "}
               {snapshot.knowledge.units} knowledge units in brain.json
