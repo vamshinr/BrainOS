@@ -20,10 +20,11 @@ type Result = {
   sourceId: string;
   addedUnits: number;
   addedEntities: number;
+  addedRelationships?: number;
   supersededUnits?: number;
   charsExtracted?: number;
   vlmDescriptionChars?: number;
-  totals: { sources: number; entities: number; units: number };
+  totals: { sources: number; entities: number; units: number; relationships?: number };
 };
 
 type Tab = "text" | "file" | "image";
@@ -375,23 +376,33 @@ export default function IngestPage() {
       {result && (
         <div className="mt-6 rounded-md border border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800 px-4 py-3 text-sm">
           <div className="font-medium">
-            Extracted {result.addedUnits} knowledge units and {result.addedEntities} entities.
+            Extracted {result.addedUnits} knowledge units
+            {result.addedEntities > 0 && `, ${result.addedEntities} entities`}
+            {(result.addedRelationships ?? 0) > 0 && (
+              <span className="text-emerald-700 dark:text-emerald-400">
+                , {result.addedRelationships} graph edges
+              </span>
+            )}.
             {(result.supersededUnits ?? 0) > 0 && (
               <span className="ml-1 text-amber-700 dark:text-amber-400">
-                · {result.supersededUnits} existing unit{result.supersededUnits === 1 ? "" : "s"} superseded.
+                · {result.supersededUnits} superseded.
               </span>
             )}
             {result.charsExtracted
-              ? ` ${result.charsExtracted.toLocaleString()} chars extracted from file.`
+              ? ` ${result.charsExtracted.toLocaleString()} chars from file.`
               : ""}
             {result.vlmDescriptionChars
-              ? ` VLM generated ${result.vlmDescriptionChars} chars of description.`
+              ? ` VLM → ${result.vlmDescriptionChars} chars description.`
               : ""}
           </div>
-          <div className="text-xs text-[var(--muted-foreground)] mt-1">
-            Brain now contains {result.totals.units} units across {result.totals.entities} entities
-            from {result.totals.sources} sources.{" "}
-            <a className="underline" href="/">View dashboard →</a>
+          <div className="text-xs text-[var(--muted-foreground)] mt-1.5 flex items-center gap-3">
+            <span>
+              Brain: {result.totals.units} units · {result.totals.entities} entities
+              {(result.totals.relationships ?? 0) > 0 && ` · ${result.totals.relationships} relationships`}
+              {" "}from {result.totals.sources} sources
+            </span>
+            <a className="underline" href="/graph">View graph →</a>
+            <a className="underline" href="/">Dashboard →</a>
           </div>
         </div>
       )}

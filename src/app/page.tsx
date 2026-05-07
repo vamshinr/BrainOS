@@ -2,6 +2,7 @@ import Link from "next/link";
 import { readState } from "@/lib/store";
 import { formatDate } from "@/lib/utils";
 import { SeedButton } from "@/components/seed-button";
+import { ResetButton } from "@/components/reset-button";
 import type { UnitKind } from "@/lib/types";
 
 const KIND_LABELS: Record<UnitKind, string> = {
@@ -151,7 +152,16 @@ export default async function Home() {
             >
               + Add knowledge
             </Link>
-            {state.sources.length === 0 && <SeedButton />}
+            {state.sources.length === 0 ? (
+              <SeedButton />
+            ) : (
+              <div className="flex items-center justify-between pt-1">
+                <Link href="/skills" className="text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)] underline underline-offset-2">
+                  Export SKILLS.md →
+                </Link>
+                <ResetButton />
+              </div>
+            )}
           </div>
         </aside>
       </section>

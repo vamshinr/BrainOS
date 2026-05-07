@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 
 const SUGGESTIONS = [
   "Who owns the billing service?",
@@ -16,6 +16,7 @@ type Answer = {
   question: string;
   answer: string;
   used: string[];
+  retrieved_texts: string[];
   latency_ms: number | null;
   feedback: Feedback | null;
 };
@@ -42,6 +43,7 @@ export default function AskPage() {
           question: q,
           answer: j.answer,
           used: j.used ?? [],
+          retrieved_texts: j.retrieved_texts ?? [],
           latency_ms: j.latency_ms ?? null,
           feedback: j.feedback ?? null,
         },
@@ -124,9 +126,9 @@ export default function AskPage() {
                   {h.latency_ms} ms · AMD MI300X
                 </span>
               )}
-              {h.used.length > 0 && (
+              {h.retrieved_texts.length > 0 && (
                 <span>
-                  Retrieved {h.used.length} unit{h.used.length !== 1 ? "s" : ""}
+                  {h.retrieved_texts.length} unit{h.retrieved_texts.length !== 1 ? "s" : ""} retrieved
                 </span>
               )}
               {h.feedback && (
@@ -149,10 +151,26 @@ export default function AskPage() {
               </div>
             )}
 
-            {h.used.length > 0 && (
-              <div className="mt-2 text-[11px] text-[var(--muted-foreground)]">
-                Unit IDs: {h.used.slice(0, 6).join(", ")}
-                {h.used.length > 6 && ` +${h.used.length - 6} more`}
+            {/* Retrieved context — shows exactly what the model was given */}
+            {h.retrieved_texts.length > 0 && (
+              <details className="mt-3">
+                <summary className="text-[11px] text-[var(--muted-foreground)] cursor-pointer hover:text-[var(--foreground)] select-none">
+                  Retrieved context ({h.retrieved_texts.length} units sent to model)
+                </summary>
+                <ol className="mt-2 space-y-1 pl-1">
+                  {h.retrieved_texts.map((t, idx) => (
+                    <li key={idx} className="text-[11px] text-[var(--muted-foreground)] flex gap-2">
+                      <span className="font-mono shrink-0 text-[var(--accent)]">{idx + 1}.</span>
+                      <span>{t}</span>
+                    </li>
+                  ))}
+                </ol>
+              </details>
+            )}
+
+            {h.retrieved_texts.length === 0 && h.used.length === 0 && (
+              <div className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
+                No units retrieved — brain may be empty or query didn&apos;t match any stored knowledge.
               </div>
             )}
           </div>

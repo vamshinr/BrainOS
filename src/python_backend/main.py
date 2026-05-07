@@ -20,6 +20,8 @@ from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 from chromadb.api.types import Documents, Embeddings
 
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+
 load_dotenv()
 
 app = FastAPI(title="BrainOS Multi-Agent Backend")
@@ -229,15 +231,65 @@ def _parse_extraction_json(raw: str) -> dict:
 # Agents
 # ══════════════════════════════════════════════════════════════════════════════
 
-class IngestionAgent:
-    """Reads raw content (text or image) and extracts structured knowledge via the 70B model."""
+def _chunk_text(text: str, max_chars: int = 3500, overlap: int = 300) -> list[str]:
+    """
+    Split text into overlapping chunks that fit the model's context window.
+    Each chunk is <= max_chars. Overlap carries context across boundaries.
+    """
+    if len(text) <= max_chars:
+        return [text]
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + max_chars
+        # Try to break at a paragraph or sentence boundary
+        if end < len(text):
+            for sep in ("\n\n", "\n", ". ", " "):
+                pos = text.rfind(sep, start + max_chars // 2, end)
+                if pos != -1:
+                    end = pos + len(sep)
+                    break
+        chunks.append(text[start:end])
+        start = end - overlap
+    return chunks
 
-    def extract_from_text(self, source_type: str, title: str, content: str) -> dict:
+
+def _merge_extractions(results: list[dict]) -> dict:
+    """Combine entity + unit + relationship lists from multiple chunk extractions."""
+    seen_entities: set[str] = set()
+    seen_stmts: set[str] = set()
+    seen_rels: set[tuple] = set()
+    entities, units, relationships = [], [], []
+
+    for r in results:
+        for e in r.get("entities", []):
+            key = e.get("name", "").lower()
+            if key and key not in seen_entities:
+                seen_entities.add(key)
+                entities.append(e)
+        for u in r.get("units", []):
+            key = u.get("statement", "").lower()[:80]
+            if key and key not in seen_stmts:
+                seen_stmts.add(key)
+                units.append(u)
+        for rel in r.get("relationships", []):
+            key = (rel.get("from", ""), rel.get("relation", ""), rel.get("to", ""))
+            if all(key) and key not in seen_rels:
+                seen_rels.add(key)
+                relationships.append(rel)
+
+    return {"entities": entities, "units": units, "relationships": relationships}
+
+
+class IngestionAgent:
+    """Reads raw content (text or image) and extracts structured knowledge via the LLM."""
+
+    def _extract_chunk(self, source_type: str, title: str, chunk: str) -> dict:
         prompt = (
             f"SOURCE TYPE: {source_type}\n"
             f"TITLE: {title}\n"
-            f"---\n{content}\n---\n\n"
-            "Extract entities and atomic knowledge units per the system instructions."
+            f"---\n{chunk}\n---\n\n"
+            "Extract entities, knowledge units, and relationships per the system instructions."
         )
         try:
             response = llm_client.chat.completions.create(
@@ -251,8 +303,19 @@ class IngestionAgent:
             )
             return _parse_extraction_json(response.choices[0].message.content)
         except Exception as e:
-            print(f"[IngestionAgent] Extraction error: {e}")
-            return {"entities": [], "units": []}
+            print(f"[IngestionAgent] Chunk extraction error: {e}")
+            return {"entities": [], "units": [], "relationships": []}
+
+    def extract_from_text(self, source_type: str, title: str, content: str) -> dict:
+        chunks = _chunk_text(content, max_chars=3500, overlap=300)
+        if len(chunks) > 1:
+            print(f"[IngestionAgent] Long content ({len(content)} chars) split into {len(chunks)} chunks")
+        results = [self._extract_chunk(source_type, title, chunk) for chunk in chunks]
+        merged = _merge_extractions(results)
+        print(f"[IngestionAgent] Extracted {len(merged['units'])} units, "
+              f"{len(merged['entities'])} entities, "
+              f"{len(merged['relationships'])} relationships from {len(chunks)} chunk(s)")
+        return merged
 
     def describe_image(self, image_data: bytes, mime_type: str = "image/png") -> str:
         """
@@ -409,10 +472,20 @@ class StructuringAgent:
             }))
 
         # ── Step 2: upsert all into ChromaDB first so reconciliation can query ──
+        # The document text must be self-contained — prepend subject when the
+        # LLM omitted it from the statement (e.g. "owns the billing service"
+        # becomes "Alice Chen owns the billing service").
+        def _full_text(unit: dict) -> str:
+            stmt = unit.get("statement", "")
+            subj = unit.get("subject", "")
+            if subj and subj.lower() not in stmt.lower():
+                return f"{subj} {stmt}"
+            return stmt
+
         if pending:
             collection.upsert(
                 ids=[uid for uid, _ in pending],
-                documents=[unit["statement"] for _, unit in pending],
+                documents=[_full_text(unit) for _, unit in pending],
                 metadatas=[{
                     "source_id": source_id,
                     "kind": unit["kind"],
@@ -539,36 +612,37 @@ class ExecutionAgent:
             retrieved_metas = results["metadatas"][0]
 
         if retrieved_docs:
-            context_blocks = [
-                f"[{m.get('kind', 'fact')} | confidence {m.get('confidence', 0.7):.2f}] {doc}"
-                for doc, m in zip(retrieved_docs, retrieved_metas)
-            ]
-            context_section = "\n".join(context_blocks)
+            # Plain numbered list — easier for smaller models to parse than
+            # bracket-prefixed metadata lines which get echoed back verbatim.
+            context_lines = []
+            for i, (doc, m) in enumerate(zip(retrieved_docs, retrieved_metas), 1):
+                context_lines.append(f"{i}. {doc}")
+            context_section = "\n".join(context_lines)
+
             user_prompt = (
-                f"COMPANY KNOWLEDGE BASE (retrieved for this question):\n"
+                f"Here are facts from the company knowledge base:\n"
                 f"{context_section}\n\n"
-                f"QUESTION: {query}\n\n"
-                f"Answer using ONLY the knowledge above. "
-                f"Be concise and specific. If the knowledge doesn't cover the question, say so clearly."
+                f"Question: {query}\n"
+                f"Answer (use specific names from the facts above, do not say 'the company'):"
+            )
+            system_msg = (
+                "You are a company knowledge assistant. "
+                "Answer the question using ONLY the numbered facts provided. "
+                "Always name the specific person, team, or system. "
+                "If the facts do not answer the question, say exactly: "
+                "'The brain does not have this information yet.'"
             )
         else:
-            user_prompt = (
-                f"The company brain has no ingested knowledge yet for this query.\n"
-                f"QUESTION: {query}\n\n"
-                f"Acknowledge that the brain is empty and suggest ingesting relevant sources."
+            user_prompt = f"Question: {query}"
+            system_msg = (
+                "The company brain has no knowledge ingested yet. "
+                "Tell the user the brain is empty and they should ingest sources first."
             )
 
         response = llm_client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are the BrainOS execution agent running on an AMD MI300X GPU. "
-                        "Answer questions strictly based on company knowledge provided in context. "
-                        "Never invent facts. Cite the knowledge you use."
-                    ),
-                },
+                {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_prompt},
             ],
             max_tokens=512,
@@ -597,13 +671,13 @@ class FeedbackAgent:
                 "feedback": "No knowledge was retrieved — answer is not grounded in company data.",
             }
 
-        ctx = "\n".join(f"- {d}" for d in context_docs)
+        ctx = "\n".join(f"{i+1}. {d}" for i, d in enumerate(context_docs))
         prompt = (
-            f"RETRIEVED CONTEXT:\n{ctx}\n\n"
-            f"QUESTION: {query}\n"
-            f"ANSWER: {answer}\n\n"
-            f"Is the answer fully supported by the context above? "
-            f"Respond ONLY with JSON (no markdown):\n"
+            f"Facts:\n{ctx}\n\n"
+            f"Question: {query}\n"
+            f"Answer: {answer}\n\n"
+            f"Is the answer supported by the facts? "
+            f"Reply with JSON only:\n"
             f'{{ "confidence": 0.0-1.0, "grounded": true/false, "feedback": "one sentence" }}'
         )
         try:
@@ -888,6 +962,7 @@ def ask_brainos(req: QueryRequest):
         "query": req.query,
         "answer": exec_result["answer"],
         "used": exec_result["retrieved_ids"],
+        "retrieved_texts": exec_result["retrieved_docs"],  # actual sentences sent to the model
         "latency_ms": exec_result["latency_ms"],
         "feedback": feedback,
     }
