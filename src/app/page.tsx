@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { readState } from "@/lib/store";
-import { hasGatewayCreds } from "@/lib/ai";
 import { formatDate } from "@/lib/utils";
 import { SeedButton } from "@/components/seed-button";
 import type { UnitKind } from "@/lib/types";
@@ -29,7 +28,6 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const state = await readState();
-  const hasCreds = hasGatewayCreds();
   const fresh = state.units.filter((u) => !u.stale && !u.supersededBy);
 
   const byKind = fresh.reduce<Record<string, number>>((acc, u) => {
@@ -55,19 +53,7 @@ export default async function Home() {
         </p>
       </header>
 
-      {!hasCreds && (
-        <div className="mb-8 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-4 py-3 text-sm">
-          <div className="font-medium">No AI credentials detected.</div>
-          <div className="text-[var(--muted-foreground)] mt-1">
-            Set <code className="font-mono">AI_GATEWAY_API_KEY</code> (recommended), or{" "}
-            <code className="font-mono">OPENAI_API_KEY</code>, in{" "}
-            <code className="font-mono">.env.local</code>, then restart the dev
-            server. Optionally set{" "}
-            <code className="font-mono">COMPANY_BRAIN_MODEL</code> (default{" "}
-            <code className="font-mono">openai/gpt-4o-mini</code>).
-          </div>
-        </div>
-      )}
+      {/* No cloud credentials needed — all AI runs on the AMD MI300X via the Python backend */}
 
       <section className="grid grid-cols-4 gap-3 mb-8">
         <Stat label="Sources" value={state.sources.length} />
@@ -84,7 +70,7 @@ export default async function Home() {
         <div>
           <SectionTitle>Recent knowledge</SectionTitle>
           {fresh.length === 0 ? (
-            <EmptyState hasCreds={hasCreds} />
+            <EmptyState />
           ) : (
             <ul className="space-y-2">
               {recentUnits.map((u) => (
@@ -164,7 +150,7 @@ export default async function Home() {
             >
               + Add knowledge
             </Link>
-            {state.sources.length === 0 && hasCreds && <SeedButton />}
+            {state.sources.length === 0 && <SeedButton />}
           </div>
         </aside>
       </section>
@@ -205,7 +191,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
-function EmptyState({ hasCreds }: { hasCreds: boolean }) {
+function EmptyState() {
   return (
     <div className="rounded-lg border border-dashed bg-[var(--muted)]/30 px-6 py-10 text-center">
       <div className="text-sm font-medium">No knowledge yet</div>
@@ -220,7 +206,7 @@ function EmptyState({ hasCreds }: { hasCreds: boolean }) {
         >
           Ingest
         </Link>
-        {hasCreds && <SeedButton />}
+        <SeedButton />
       </div>
     </div>
   );

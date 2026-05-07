@@ -10,6 +10,7 @@ import time
 import threading
 import datetime
 import re
+import io
 import uvicorn
 
 from openai import OpenAI
@@ -198,8 +199,100 @@ class IngestionAgent:
             return f"[VLM description unavailable — configure VLM_API_BASE and VLM_MODEL_NAME. Error: {e}]"
 
 
+RECONCILE_SYSTEM = """You reconcile a new knowledge unit against existing similar ones from the company brain.
+
+Verdicts:
+  supersedes  – the new unit makes the existing one wrong or outdated (changed owner, updated policy, overriding decision, corrected fact). Mark the OLD unit as stale.
+  duplicate   – both say effectively the same thing. Discard the new unit.
+  independent – different enough to coexist. Keep both.
+
+Be conservative: only mark supersedes/duplicate when very confident. When in doubt, return independent.
+
+Return ONLY valid JSON (no markdown):
+{"verdict": "supersedes"|"duplicate"|"independent", "reason": "one sentence"}"""
+
+
 class StructuringAgent:
-    """Embeds knowledge units into ChromaDB and syncs state to brain.json for the Next.js frontend."""
+    """
+    Embeds knowledge units into ChromaDB, runs reconciliation against existing units,
+    and syncs the merged state to brain.json for the Next.js frontend.
+    """
+
+    def _reconcile(self, new_unit: dict, new_uid: str, source_id: str) -> dict:
+        """
+        Query ChromaDB for semantically similar existing units from other sources.
+        If any are found above the similarity threshold, call the 70B model once
+        to classify the relationship. Returns superseded IDs and duplicate flag.
+        """
+        total = collection.count()
+        if total < 2:
+            return {"superseded_ids": [], "is_duplicate": False}
+
+        try:
+            results = collection.query(
+                query_texts=[new_unit["statement"]],
+                n_results=min(4, total),
+                where={"$and": [
+                    {"kind": {"$eq": new_unit["kind"]}},
+                    {"source_id": {"$ne": source_id}},
+                ]},
+            )
+        except Exception:
+            # ChromaDB where filter requires at least 1 matching doc; ignore gracefully
+            return {"superseded_ids": [], "is_duplicate": False}
+
+        ids = results["ids"][0] if results["ids"] else []
+        distances = results["distances"][0] if results["distances"] else []
+        docs = results["documents"][0] if results["documents"] else []
+        metas = results["metadatas"][0] if results["metadatas"] else []
+
+        # Cosine distance < 0.15 → similarity > 0.85 → worth classifying
+        candidates = [
+            {"id": cid, "statement": doc, "subject": m.get("subject", ""), "distance": dist}
+            for cid, dist, doc, m in zip(ids, distances, docs, metas)
+            if dist < 0.15 and cid != new_uid
+        ]
+
+        if not candidates:
+            return {"superseded_ids": [], "is_duplicate": False}
+
+        # Single LLM call covering all candidates
+        candidates_text = "\n".join(
+            f'  [{c["id"]}] (similarity {1 - c["distance"]:.2f}) "{c["statement"]}"'
+            for c in candidates
+        )
+        prompt = (
+            f"NEW UNIT:\n"
+            f'  kind: {new_unit["kind"]}\n'
+            f'  subject: {new_unit["subject"]}\n'
+            f'  statement: "{new_unit["statement"]}"\n\n'
+            f"EXISTING SIMILAR UNITS:\n{candidates_text}\n\n"
+            f"Pick the single most relevant existing unit and return your verdict.\n"
+            f'If none warrant supersedes/duplicate, return {{"verdict": "independent", "reason": "..."}}.\n'
+            f'Otherwise include "target_id": "<id>" for the unit your verdict applies to.'
+        )
+        try:
+            resp = llm_client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": RECONCILE_SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=120,
+                temperature=0.0,
+            )
+            result = _parse_extraction_json(resp.choices[0].message.content)
+            verdict = result.get("verdict", "independent")
+            target_id = result.get("target_id")
+
+            if verdict == "duplicate":
+                return {"superseded_ids": [], "is_duplicate": True}
+            if verdict == "supersedes" and target_id:
+                return {"superseded_ids": [target_id], "is_duplicate": False}
+        except Exception as e:
+            print(f"[Reconcile] LLM error: {e}")
+
+        return {"superseded_ids": [], "is_duplicate": False}
 
     def embed_and_store(
         self,
@@ -210,13 +303,11 @@ class StructuringAgent:
     ) -> dict:
         now = datetime.datetime.utcnow().isoformat() + "Z"
 
-        # Build unit objects matching the TypeScript KnowledgeUnit shape
-        stored_units = []
-        chroma_ids, chroma_docs, chroma_metas = [], [], []
-
+        # ── Step 1: build unit objects ──────────────────────────────────────
+        pending = []
         for u in units:
             uid = str(uuid.uuid4())[:10]
-            unit = {
+            pending.append((uid, {
                 "id": uid,
                 "kind": u.get("kind", "fact"),
                 "subject": u.get("subject", ""),
@@ -226,30 +317,45 @@ class StructuringAgent:
                 "confidence": float(u.get("confidence", 0.7)),
                 "createdAt": now,
                 "updatedAt": now,
-            }
+            }))
+
+        # ── Step 2: upsert all into ChromaDB first so reconciliation can query ──
+        if pending:
+            collection.upsert(
+                ids=[uid for uid, _ in pending],
+                documents=[unit["statement"] for _, unit in pending],
+                metadatas=[{
+                    "source_id": source_id,
+                    "kind": unit["kind"],
+                    "subject": unit["subject"],
+                    "confidence": unit["confidence"],
+                } for _, unit in pending],
+            )
+
+        # ── Step 3: reconcile each new unit against existing ones ───────────
+        superseded_ids: set[str] = set()
+        stored_units = []
+
+        for uid, unit in pending:
+            rec = self._reconcile(unit, uid, source_id)
+            if rec["is_duplicate"]:
+                # Remove the just-upserted duplicate from ChromaDB
+                try:
+                    collection.delete(ids=[uid])
+                except Exception:
+                    pass
+                continue
+            superseded_ids.update(rec["superseded_ids"])
             stored_units.append(unit)
-            chroma_ids.append(uid)
-            chroma_docs.append(unit["statement"])
-            chroma_metas.append({
-                "source_id": source_id,
-                "kind": unit["kind"],
-                "subject": unit["subject"],
-                "confidence": unit["confidence"],
-            })
 
-        # Upsert into ChromaDB (handles re-ingestion gracefully)
-        if chroma_ids:
-            collection.upsert(ids=chroma_ids, documents=chroma_docs, metadatas=chroma_metas)
-
-        # Merge into brain.json so the Next.js dashboard reflects real data
+        # ── Step 4: merge into brain.json ───────────────────────────────────
         brain = _read_brain()
 
         # Entity dedup by name (case-insensitive)
         new_entities = []
         for e in entities:
-            eid = str(uuid.uuid4())[:8]
             entity = {
-                "id": eid,
+                "id": str(uuid.uuid4())[:8],
                 "name": e.get("name", ""),
                 "kind": e.get("kind", "concept"),
                 "aliases": e.get("aliases", []),
@@ -264,12 +370,21 @@ class StructuringAgent:
                 brain["entities"].insert(0, entity)
                 new_entities.append(entity)
 
+        # Mark superseded units as stale in brain.json
+        superseded_count = 0
+        for bu in brain["units"]:
+            if bu["id"] in superseded_ids and not bu.get("stale"):
+                bu["stale"] = True
+                bu["supersededBy"] = stored_units[0]["id"] if stored_units else "unknown"
+                superseded_count += 1
+
         brain["units"] = stored_units + brain["units"]
         brain["sources"].insert(0, source)
         _write_brain(brain)
 
         return {
             "units_stored": len(stored_units),
+            "units_superseded": superseded_count,
             "entities_stored": len(new_entities),
             "chroma_total": collection.count(),
             "brain_totals": {
@@ -445,6 +560,80 @@ def ingest_text(req: IngestRequest):
 
     return {
         "message": "Ingested and structured via 70B model + ChromaDB.",
+        "source_id": source_id,
+        "units_extracted": len(extraction.get("units", [])),
+        "entities_extracted": len(extraction.get("entities", [])),
+        **result,
+    }
+
+
+def _extract_file_text(filename: str, data: bytes) -> str:
+    """Extract plain text from PDF, TXT, MD, or CSV uploads."""
+    name = filename.lower()
+    if name.endswith(".pdf"):
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(data))
+            pages = [page.extract_text() or "" for page in reader.pages]
+            return "\n\n".join(p for p in pages if p.strip())
+        except Exception as e:
+            return f"[PDF extraction failed: {e}]"
+    # TXT / MD / CSV — decode directly
+    for enc in ("utf-8", "latin-1"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+@app.post("/api/ingest_file")
+async def ingest_file(
+    title: str = Form(...),
+    kind: str = Form("doc"),
+    url: Optional[str] = Form(None),
+    file: UploadFile = File(...),
+):
+    """
+    File upload pipeline:
+      PDF/TXT/MD/CSV → text extraction → 70B extraction → ChromaDB → brain.json
+    """
+    data = await file.read()
+    filename = file.filename or "upload"
+    text = _extract_file_text(filename, data)
+
+    if not text.strip():
+        raise HTTPException(status_code=422, detail="Could not extract any text from the file.")
+
+    source_id = str(uuid.uuid4())[:8]
+    now = datetime.datetime.utcnow().isoformat() + "Z"
+
+    extraction = ingest_agent.extract_from_text(
+        source_type=kind,
+        title=title,
+        content=text,
+    )
+
+    source = {
+        "id": source_id,
+        "kind": kind,
+        "title": title,
+        "content": text,
+        "url": url,
+        "capturedAt": now,
+        "uploadedFilename": filename,
+    }
+
+    result = struct_agent.embed_and_store(
+        source_id=source_id,
+        source=source,
+        units=extraction.get("units", []),
+        entities=extraction.get("entities", []),
+    )
+
+    return {
+        "message": f"File '{filename}' ingested.",
+        "chars_extracted": len(text),
         "source_id": source_id,
         "units_extracted": len(extraction.get("units", [])),
         "entities_extracted": len(extraction.get("entities", [])),

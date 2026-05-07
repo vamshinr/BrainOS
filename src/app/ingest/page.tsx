@@ -20,11 +20,13 @@ type Result = {
   sourceId: string;
   addedUnits: number;
   addedEntities: number;
+  supersededUnits?: number;
+  charsExtracted?: number;
   vlmDescriptionChars?: number;
   totals: { sources: number; entities: number; units: number };
 };
 
-type Tab = "text" | "image";
+type Tab = "text" | "file" | "image";
 
 export default function IngestPage() {
   const router = useRouter();
@@ -36,19 +38,26 @@ export default function IngestPage() {
   const [content, setContent] = useState("");
   const [url, setUrl] = useState("");
 
+  // File form state
+  const [fileKind, setFileKind] = useState<KindValue>("doc");
+  const [fileTitle, setFileTitle] = useState("");
+  const [fileUrl, setFileUrl] = useState("");
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // Image form state
   const [imgKind, setImgKind] = useState<KindValue>("doc");
   const [imgTitle, setImgTitle] = useState("");
   const [imgUrl, setImgUrl] = useState("");
   const [imgFile, setImgFile] = useState<File | null>(null);
   const [imgPreview, setImgPreview] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const imgInputRef = useRef<HTMLInputElement>(null);
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<Result | null>(null);
 
-  function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  function onImgChange(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0] ?? null;
     setImgFile(f);
     if (f) {
@@ -57,6 +66,35 @@ export default function IngestPage() {
       reader.readAsDataURL(f);
     } else {
       setImgPreview(null);
+    }
+  }
+
+  async function submitFile(e: React.FormEvent) {
+    e.preventDefault();
+    if (!uploadFile) return;
+    setErr(null);
+    setResult(null);
+    setLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", uploadFile, uploadFile.name);
+      fd.append("title", fileTitle);
+      fd.append("kind", fileKind);
+      if (fileUrl) fd.append("url", fileUrl);
+
+      const res = await fetch("/api/ingest-file", { method: "POST", body: fd });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
+      setResult(j);
+      setFileTitle("");
+      setUploadFile(null);
+      setFileUrl("");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      router.refresh();
+    } catch (e) {
+      setErr(String(e instanceof Error ? e.message : e));
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -106,7 +144,7 @@ export default function IngestPage() {
       setImgFile(null);
       setImgPreview(null);
       setImgUrl("");
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      if (imgInputRef.current) imgInputRef.current.value = "";
       router.refresh();
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));
@@ -124,24 +162,28 @@ export default function IngestPage() {
         Drop in a knowledge source.
       </h1>
       <p className="mt-2 text-[var(--muted-foreground)] max-w-xl">
-        Paste text or upload an image — screenshots, diagrams, whiteboards, slides.
-        The brain extracts atomic facts, processes, decisions, owners, policies,
-        and gotchas, then stores them in ChromaDB for semantic retrieval.
+        Paste text, upload a file, or drop an image. The brain extracts atomic facts,
+        processes, decisions, owners, policies, and gotchas — then reconciles them
+        against existing knowledge in ChromaDB.
       </p>
 
       {/* Tab switcher */}
       <div className="mt-6 flex gap-1 rounded-lg border bg-[var(--muted)]/30 p-1 w-fit">
-        {(["text", "image"] as Tab[]).map((t) => (
+        {([
+          { id: "text", label: "Text / Paste" },
+          { id: "file", label: "File Upload" },
+          { id: "image", label: "Image / VLM" },
+        ] as { id: Tab; label: string }[]).map((t) => (
           <button
-            key={t}
-            onClick={() => { setTab(t); setErr(null); setResult(null); }}
+            key={t.id}
+            onClick={() => { setTab(t.id); setErr(null); setResult(null); }}
             className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${
-              tab === t
+              tab === t.id
                 ? "bg-[var(--foreground)] text-[var(--background)]"
                 : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
             }`}
           >
-            {t === "text" ? "Text / Paste" : "Image / Screenshot"}
+            {t.label}
           </button>
         ))}
       </div>
@@ -196,6 +238,67 @@ export default function IngestPage() {
         </form>
       )}
 
+      {/* ── File upload form ── */}
+      {tab === "file" && (
+        <form onSubmit={submitFile} className="mt-8 space-y-4">
+          <div className="rounded-md border border-zinc-200 bg-zinc-50 dark:bg-zinc-900/30 dark:border-zinc-700 px-4 py-3 text-sm text-zinc-700 dark:text-zinc-300">
+            Upload a <strong>PDF</strong>, <strong>.txt</strong>, <strong>.md</strong>, or <strong>.csv</strong> file.
+            The 70B model on the AMD MI300X extracts knowledge units and reconciles them against what the brain already knows.
+          </div>
+
+          <div className="grid grid-cols-[160px_1fr] gap-3">
+            <Field label="Source type">
+              <select
+                value={fileKind}
+                onChange={(e) => setFileKind(e.target.value as KindValue)}
+                className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm"
+              >
+                {KINDS.map((k) => (
+                  <option key={k.value} value={k.value}>{k.label}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Title">
+              <input
+                value={fileTitle}
+                onChange={(e) => setFileTitle(e.target.value)}
+                required
+                placeholder="e.g. Engineering handbook Q2 2026"
+                className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm"
+              />
+            </Field>
+          </div>
+
+          <Field label="Source URL (optional)">
+            <input
+              value={fileUrl}
+              onChange={(e) => setFileUrl(e.target.value)}
+              placeholder="https://…"
+              className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm"
+            />
+          </Field>
+
+          <Field label="File (PDF, TXT, MD, CSV)">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.txt,.md,.csv,text/plain,text/markdown,text/csv,application/pdf"
+              onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
+              required
+              className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm file:mr-3 file:rounded file:border-0 file:bg-[var(--foreground)] file:text-[var(--background)] file:px-3 file:py-1 file:text-xs file:font-medium"
+            />
+          </Field>
+
+          {uploadFile && (
+            <div className="text-[11px] text-[var(--muted-foreground)]">
+              {uploadFile.name} · {(uploadFile.size / 1024).toFixed(1)} KB
+            </div>
+          )}
+
+          <SubmitRow loading={loading} disabled={!fileTitle || !uploadFile} label="Extract knowledge" />
+        </form>
+      )}
+
       {/* ── Image form ── */}
       {tab === "image" && (
         <form onSubmit={submitImage} className="mt-8 space-y-4">
@@ -239,10 +342,10 @@ export default function IngestPage() {
 
           <Field label="Image file">
             <input
-              ref={fileInputRef}
+              ref={imgInputRef}
               type="file"
               accept="image/*"
-              onChange={onFileChange}
+              onChange={onImgChange}
               required
               className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm file:mr-3 file:rounded file:border-0 file:bg-[var(--foreground)] file:text-[var(--background)] file:px-3 file:py-1 file:text-xs file:font-medium"
             />
@@ -273,6 +376,14 @@ export default function IngestPage() {
         <div className="mt-6 rounded-md border border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800 px-4 py-3 text-sm">
           <div className="font-medium">
             Extracted {result.addedUnits} knowledge units and {result.addedEntities} entities.
+            {(result.supersededUnits ?? 0) > 0 && (
+              <span className="ml-1 text-amber-700 dark:text-amber-400">
+                · {result.supersededUnits} existing unit{result.supersededUnits === 1 ? "" : "s"} superseded.
+              </span>
+            )}
+            {result.charsExtracted
+              ? ` ${result.charsExtracted.toLocaleString()} chars extracted from file.`
+              : ""}
             {result.vlmDescriptionChars
               ? ` VLM generated ${result.vlmDescriptionChars} chars of description.`
               : ""}
