@@ -456,6 +456,17 @@ class StructuringAgent:
         now = datetime.datetime.utcnow().isoformat() + "Z"
 
         # ── Step 1: build unit objects ──────────────────────────────────────
+        # The LLM often splits subject ("Alice Chen") and statement ("owns
+        # billing service") into separate fields. We normalize every statement
+        # to be self-contained BEFORE writing to brain.json or ChromaDB so
+        # that SKILLS.md, retrieval, and answers all use the complete sentence.
+        def _normalize_statement(u: dict) -> str:
+            stmt = u.get("statement", "").strip()
+            subj = u.get("subject", "").strip()
+            if subj and subj.lower() not in stmt.lower():
+                return f"{subj} {stmt}"
+            return stmt
+
         pending = []
         for u in units:
             uid = str(uuid.uuid4())[:10]
@@ -463,7 +474,7 @@ class StructuringAgent:
                 "id": uid,
                 "kind": u.get("kind", "fact"),
                 "subject": u.get("subject", ""),
-                "statement": u.get("statement", ""),
+                "statement": _normalize_statement(u),  # always self-contained
                 "entities": u.get("entities", []),
                 "evidence": [{"sourceId": source_id, "quote": u.get("evidence_quote", "")}],
                 "confidence": float(u.get("confidence", 0.7)),
@@ -1102,7 +1113,7 @@ def clear_all():
         embedding_function=embedding_fn,
         metadata={"hnsw:space": "cosine"},
     )
-    _write_brain({"sources": [], "entities": [], "units": []})
+    _write_brain({"sources": [], "entities": [], "units": [], "relationships": []})
     return {"ok": True, "cleared": True}
 
 
