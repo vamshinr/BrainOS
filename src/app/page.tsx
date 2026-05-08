@@ -3,6 +3,7 @@ import { readState } from "@/lib/store";
 import { formatDate } from "@/lib/utils";
 import { SeedButton } from "@/components/seed-button";
 import { ResetButton } from "@/components/reset-button";
+import { GapAnalysisButton } from "@/components/gap-analysis-button";
 import type { UnitKind } from "@/lib/types";
 
 const KIND_LABELS: Record<UnitKind, string> = {
@@ -87,7 +88,18 @@ export default async function Home() {
                       {KIND_LABELS[u.kind]}
                     </span>
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm leading-snug">{u.statement}</div>
+                      <div className="flex items-start gap-2">
+                        <div className="text-sm leading-snug flex-1">{u.statement}</div>
+                        {u.disputed && (
+                          <span
+                            title={`Conflicts with ${u.conflictsWith?.length ?? 0} other unit(s) — click to resolve`}
+                            className="shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300 border border-red-200 dark:border-red-800"
+                          >
+                            <span className="size-1.5 rounded-full bg-red-500 inline-block animate-pulse" />
+                            Disputed
+                          </span>
+                        )}
+                      </div>
                       <div className="mt-1.5 flex items-center gap-2 text-[11px] text-[var(--muted-foreground)]">
                         <span>subject: {u.subject}</span>
                         <span>·</span>
@@ -155,12 +167,15 @@ export default async function Home() {
             {state.sources.length === 0 ? (
               <SeedButton />
             ) : (
-              <div className="flex items-center justify-between pt-1">
-                <Link href="/skills" className="text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)] underline underline-offset-2">
-                  Export SKILLS.md →
-                </Link>
-                <ResetButton />
-              </div>
+              <>
+                <GapAnalysisButton />
+                <div className="flex items-center justify-between pt-1">
+                  <Link href="/skills" className="text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)] underline underline-offset-2">
+                    Export SKILLS.md →
+                  </Link>
+                  <ResetButton />
+                </div>
+              </>
             )}
           </div>
         </aside>

@@ -350,17 +350,47 @@ class IngestionAgent:
             return f"[VLM description unavailable — configure VLM_API_BASE and VLM_MODEL_NAME. Error: {e}]"
 
 
-RECONCILE_SYSTEM = """You reconcile a new knowledge unit against existing similar ones from the company brain.
+RECONCILE_SYSTEM = """You reconcile a new knowledge unit against existing similar units from the company brain.
 
-Verdicts:
-  supersedes  – the new unit makes the existing one wrong or outdated (changed owner, updated policy, overriding decision, corrected fact). Mark the OLD unit as stale.
-  duplicate   – both say effectively the same thing. Discard the new unit.
-  independent – different enough to coexist. Keep both.
+Pick ONE of four verdicts:
 
-Be conservative: only mark supersedes/duplicate when very confident. When in doubt, return independent.
+  supersedes  – the NEW unit replaces the OLD one because it updates, corrects, or replaces it.
+                Examples:
+                  OLD: "Alice owns billing-svc"
+                  NEW: "Bob and Nick took over billing-svc from Alice"
+                  → supersedes (ownership transferred).
 
-Return ONLY valid JSON (no markdown):
-{"verdict": "supersedes"|"duplicate"|"independent", "reason": "one sentence"}"""
+                  OLD: "We use Adyen for payments"
+                  NEW: "We migrated from Adyen to Stripe"
+                  → supersedes.
+
+  duplicate   – both say effectively the same thing in different words. Drop the NEW one.
+                Example:
+                  OLD: "Bob and Nick took over billing"
+                  NEW: "bob nick took over the billing"
+                  → duplicate.
+
+  conflicts   – both claim to be currently true but contradict each other and there is
+                NO temporal cue showing which is newer. Keep both, flag as disputed.
+                Example:
+                  OLD (from Slack): "Alice owns billing-svc"
+                  NEW (from Notion): "Bob owns billing-svc"
+                  with no "took over" or date.
+                  → conflicts.
+
+  independent – different facts about possibly different subjects. Keep both.
+
+Decision rules:
+- If the NEW statement contains "took over", "replaced", "now owned by", "moved to",
+  "no longer", "switched to", "as of", "previously" → likely supersedes.
+- If two units make the same kind of claim about the same subject with different
+  values and no temporal cue → conflicts.
+- If statements just describe different aspects (one says "owns", another says "uses") → independent.
+
+Return ONLY valid JSON (no markdown, no prose):
+{"verdict": "supersedes"|"duplicate"|"conflicts"|"independent", "target_id": "<id>", "reason": "one sentence"}
+
+target_id must be the id of the existing unit your verdict applies to."""
 
 
 class StructuringAgent:
@@ -394,22 +424,27 @@ class StructuringAgent:
         docs = results["documents"][0] if results["documents"] else []
         metas = results["metadatas"][0] if results["metadatas"] else []
 
-        # Post-filter: same kind, different source, cosine distance < 0.15
+        # Post-filter: cosine distance < 0.30. Allow cross-kind (e.g. an
+        # ownership statement may semantically supersede a fact). Allow
+        # same-source (the LLM often emits old + new ownership in one chunk).
         candidates = [
-            {"id": cid, "statement": doc, "subject": m.get("subject", ""), "distance": dist}
+            {
+                "id": cid,
+                "statement": doc,
+                "kind": m.get("kind", ""),
+                "subject": m.get("subject", ""),
+                "distance": dist,
+            }
             for cid, dist, doc, m in zip(ids, distances, docs, metas)
-            if dist < 0.15
-            and cid != new_uid
-            and m.get("source_id") != source_id
-            and m.get("kind") == new_unit["kind"]
+            if dist < 0.30 and cid != new_uid
         ]
 
         if not candidates:
-            return {"superseded_ids": [], "is_duplicate": False}
+            return {"superseded_ids": [], "duplicate": False, "conflicts_with": []}
 
         # Single LLM call covering all candidates
         candidates_text = "\n".join(
-            f'  [{c["id"]}] (similarity {1 - c["distance"]:.2f}) "{c["statement"]}"'
+            f'  [{c["id"]}] (kind={c["kind"]}, similarity {1 - c["distance"]:.2f}) "{c["statement"]}"'
             for c in candidates
         )
         prompt = (
@@ -418,9 +453,8 @@ class StructuringAgent:
             f'  subject: {new_unit["subject"]}\n'
             f'  statement: "{new_unit["statement"]}"\n\n'
             f"EXISTING SIMILAR UNITS:\n{candidates_text}\n\n"
-            f"Pick the single most relevant existing unit and return your verdict.\n"
-            f'If none warrant supersedes/duplicate, return {{"verdict": "independent", "reason": "..."}}.\n'
-            f'Otherwise include "target_id": "<id>" for the unit your verdict applies to.'
+            f"Pick the single most relevant existing unit. Apply the decision rules.\n"
+            f'Return JSON with target_id set to the id of the matching existing unit.'
         )
         try:
             resp = llm_client.chat.completions.create(
@@ -429,21 +463,24 @@ class StructuringAgent:
                     {"role": "system", "content": RECONCILE_SYSTEM},
                     {"role": "user", "content": prompt},
                 ],
-                max_tokens=120,
+                max_tokens=160,
                 temperature=0.0,
             )
             result = _parse_extraction_json(resp.choices[0].message.content)
             verdict = result.get("verdict", "independent")
             target_id = result.get("target_id")
+            print(f"[Reconcile] verdict={verdict} target={target_id} reason={result.get('reason','')}")
 
             if verdict == "duplicate":
-                return {"superseded_ids": [], "is_duplicate": True}
+                return {"superseded_ids": [], "duplicate": True, "conflicts_with": []}
             if verdict == "supersedes" and target_id:
-                return {"superseded_ids": [target_id], "is_duplicate": False}
+                return {"superseded_ids": [target_id], "duplicate": False, "conflicts_with": []}
+            if verdict == "conflicts" and target_id:
+                return {"superseded_ids": [], "duplicate": False, "conflicts_with": [target_id]}
         except Exception as e:
             print(f"[Reconcile] LLM error: {e}")
 
-        return {"superseded_ids": [], "is_duplicate": False}
+        return {"superseded_ids": [], "duplicate": False, "conflicts_with": []}
 
     def embed_and_store(
         self,
@@ -508,10 +545,12 @@ class StructuringAgent:
         # ── Step 3: reconcile each new unit against existing ones ───────────
         superseded_ids: set[str] = set()
         stored_units = []
+        # conflict pairs: target_existing_id -> set of new_unit_ids that conflict with it
+        conflict_pairs: dict[str, set[str]] = {}
 
         for uid, unit in pending:
             rec = self._reconcile(unit, uid, source_id)
-            if rec["is_duplicate"]:
+            if rec["duplicate"]:
                 # Remove the just-upserted duplicate from ChromaDB
                 try:
                     collection.delete(ids=[uid])
@@ -519,6 +558,11 @@ class StructuringAgent:
                     pass
                 continue
             superseded_ids.update(rec["superseded_ids"])
+            for target_id in rec["conflicts_with"]:
+                conflict_pairs.setdefault(target_id, set()).add(uid)
+                # Mark the new unit as disputed and store back-reference
+                unit["disputed"] = True
+                unit.setdefault("conflictsWith", []).append(target_id)
             stored_units.append(unit)
 
         # ── Step 4: merge into brain.json ───────────────────────────────────
@@ -550,6 +594,16 @@ class StructuringAgent:
                 bu["stale"] = True
                 bu["supersededBy"] = stored_units[0]["id"] if stored_units else "unknown"
                 superseded_count += 1
+
+        # Mark existing units as disputed when a new unit conflicts with them.
+        disputed_count = 0
+        for bu in brain["units"]:
+            if bu["id"] in conflict_pairs:
+                bu["disputed"] = True
+                existing = set(bu.get("conflictsWith", []))
+                existing.update(conflict_pairs[bu["id"]])
+                bu["conflictsWith"] = list(existing)
+                disputed_count += 1
 
         brain["units"] = stored_units + brain["units"]
         brain["sources"].insert(0, source)
@@ -592,6 +646,7 @@ class StructuringAgent:
         return {
             "units_stored": len(stored_units),
             "units_superseded": superseded_count,
+            "units_disputed": disputed_count,
             "entities_stored": len(new_entities),
             "relationships_stored": len(new_rels),
             "chroma_total": collection.count(),
@@ -962,6 +1017,20 @@ def ingest_mock():
 
 @app.post("/api/ask")
 def ask_brainos(req: QueryRequest):
+    blocked = _is_sensitive(req.query)
+    if blocked:
+        return {
+            "query": req.query,
+            "answer": (
+                f"This brain is configured to refuse questions touching '{blocked}'. "
+                "Contact a brain administrator if you need this information."
+            ),
+            "used": [],
+            "retrieved_texts": [],
+            "latency_ms": 0,
+            "feedback": {"confidence": 1.0, "grounded": True, "feedback": "Blocked by policy."},
+            "blocked_topic": blocked,
+        }
     exec_result = exec_agent.execute(req.query)
     feedback = feedback_agent.evaluate(
         query=req.query,
@@ -1098,6 +1167,123 @@ def delete_unit(unit_id: str):
     brain["units"] = [u for u in brain["units"] if u["id"] != unit_id]
     _write_brain(brain)
     return {"ok": True, "unit_id": unit_id}
+
+
+# ── Security gates ────────────────────────────────────────────────────────────
+# Simple env-driven guards. If EXPORT_TOKEN is unset, export is open. If set,
+# /api/skills_export and SKILLS.md downloads require a matching ?token=...
+# SENSITIVE_TOPICS is a comma-separated list of substrings. /api/ask refuses
+# queries that match any of them. Both are intentionally low-tech for the demo.
+EXPORT_TOKEN = os.getenv("EXPORT_TOKEN", "").strip()
+SENSITIVE_TOPICS = [
+    t.strip().lower() for t in os.getenv("SENSITIVE_TOPICS", "").split(",") if t.strip()
+]
+
+
+def _is_sensitive(query: str) -> str | None:
+    """Return the matched topic if the query touches a sensitive subject."""
+    q = query.lower()
+    for topic in SENSITIVE_TOPICS:
+        if topic and topic in q:
+            return topic
+    return None
+
+
+@app.get("/api/skills_export")
+def skills_export(token: str = ""):
+    """Return brain state for SKILLS.md generation. Gated by EXPORT_TOKEN if set."""
+    if EXPORT_TOKEN and token != EXPORT_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid or missing export token.")
+    return _read_brain()
+
+
+# ── Knowledge gap analysis ───────────────────────────────────────────────────
+@app.post("/api/analyze/gaps")
+def analyze_gaps():
+    """
+    Find structural holes in the knowledge graph:
+      - Systems / products / teams without a documented owner.
+      - Entities mentioned but never described in any unit.
+      - Gotchas without a sibling process/policy.
+      - Disputed units waiting for resolution.
+    Cheap, deterministic, no LLM call. Run on demand.
+    """
+    brain = _read_brain()
+    units = [u for u in brain.get("units", []) if not u.get("stale") and not u.get("supersededBy")]
+    entities = brain.get("entities", [])
+    rels = brain.get("relationships", [])
+
+    gaps = []
+
+    # 1. Systems/products/teams with no owner
+    OWNER_VERBS = {"owns", "manages", "governs"}
+    owned_targets = {r["to"].lower() for r in rels if r["relation"].lower() in OWNER_VERBS}
+    for e in entities:
+        if e["kind"] in ("system", "product", "team") and e["name"].lower() not in owned_targets:
+            gaps.append({
+                "severity": "high",
+                "kind": "missing_owner",
+                "entity": e["name"],
+                "message": f"No documented owner for {e['kind']} '{e['name']}'.",
+            })
+
+    # 2. Entities mentioned in units but never described as a subject
+    subjects = {u["subject"].lower() for u in units if u.get("subject")}
+    mentioned = {n.lower() for u in units for n in u.get("entities", [])}
+    for name in mentioned - subjects:
+        # Skip if the entity appears as an owner target (already covered)
+        if name and name not in owned_targets and len(name) > 2:
+            ent = next((e for e in entities if e["name"].lower() == name), None)
+            if ent:
+                gaps.append({
+                    "severity": "medium",
+                    "kind": "undescribed_entity",
+                    "entity": ent["name"],
+                    "message": f"'{ent['name']}' is mentioned but no unit describes it directly.",
+                })
+
+    # 3. Gotchas with no neighbouring process/policy
+    by_subject: dict[str, set[str]] = {}
+    for u in units:
+        s = u.get("subject", "").lower()
+        if s:
+            by_subject.setdefault(s, set()).add(u.get("kind", ""))
+    for u in units:
+        if u.get("kind") == "gotcha":
+            kinds = by_subject.get(u.get("subject", "").lower(), set())
+            if not (kinds & {"process", "policy"}):
+                gaps.append({
+                    "severity": "low",
+                    "kind": "orphan_gotcha",
+                    "entity": u.get("subject", ""),
+                    "message": f"Gotcha about '{u.get('subject')}' has no documented process or policy.",
+                })
+
+    # 4. Open disputes
+    for u in units:
+        if u.get("disputed"):
+            gaps.append({
+                "severity": "high",
+                "kind": "open_dispute",
+                "entity": u.get("subject", ""),
+                "message": f"Disputed claim about '{u.get('subject')}': {u.get('statement')}",
+                "unitId": u["id"],
+                "conflictsWith": u.get("conflictsWith", []),
+            })
+
+    # Sort: high → medium → low
+    sev_order = {"high": 0, "medium": 1, "low": 2}
+    gaps.sort(key=lambda g: sev_order.get(g["severity"], 3))
+
+    return {
+        "gaps": gaps,
+        "counts": {
+            "high": sum(1 for g in gaps if g["severity"] == "high"),
+            "medium": sum(1 for g in gaps if g["severity"] == "medium"),
+            "low": sum(1 for g in gaps if g["severity"] == "low"),
+            "total": len(gaps),
+        },
+    }
 
 
 @app.delete("/api/clear")
