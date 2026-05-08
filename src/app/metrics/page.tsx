@@ -36,15 +36,43 @@ type VlmInfo = {
   endpoint: string;
 };
 
+type Route = {
+  task: string;
+  model: string;
+  endpoint: string;
+  shared_with_default: boolean;
+};
+
+type RecentCall = {
+  ts: string;
+  task: string;
+  model: string;
+  latency_ms: number;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  ok: boolean;
+  note: string;
+};
+
 type Snapshot = {
   gpu: GpuMetrics;
   rag: RagMetrics;
   knowledge: KnowledgeMetrics;
   vlm: VlmInfo;
+  routes: Route[];
+  recent_calls: RecentCall[];
   ts: number; // client timestamp
 };
 
 const REFRESH_MS = 5000;
+
+const TASK_TINT: Record<string, string> = {
+  extraction: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300",
+  reconcile: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+  execute: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+  feedback: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300",
+  vlm: "bg-pink-100 text-pink-800 dark:bg-pink-900/40 dark:text-pink-300",
+};
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function fmt(n: number | null | undefined, decimals = 1, unit = ""): string {
@@ -267,9 +295,9 @@ export default function MetricsPage() {
                 sub="end-to-end per request"
               />
               <StatCard
-                label="Total requests"
+                label="Total LLM calls"
                 value={String(Math.round(snapshot.gpu.total_requests_finished))}
-                sub="finished"
+                sub="finished on this vLLM since startup"
               />
             </div>
 
@@ -382,6 +410,119 @@ export default function MetricsPage() {
                 activate image ingestion on the AMD MI300X.
               </div>
             </div>
+          </section>
+
+          {/* ── Model routing ── */}
+          <section>
+            <SectionTitle>Model routing — which model handles what</SectionTitle>
+            <div className="rounded-lg border bg-[var(--card)] overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-[var(--muted)]/30 text-[10px] uppercase tracking-widest text-[var(--muted-foreground)]">
+                    <th className="text-left px-4 py-2.5">Task</th>
+                    <th className="text-left px-4 py-2.5">Model</th>
+                    <th className="text-left px-4 py-2.5">Endpoint</th>
+                    <th className="text-right px-4 py-2.5">Mode</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(snapshot.routes ?? []).map((r) => (
+                    <tr key={r.task} className="border-b last:border-0">
+                      <td className="px-4 py-2 font-mono text-[12px]">{r.task}</td>
+                      <td className="px-4 py-2 font-mono text-[11px]">{r.model}</td>
+                      <td className="px-4 py-2 font-mono text-[10px] text-[var(--muted-foreground)] truncate max-w-[260px]">
+                        {r.endpoint}
+                      </td>
+                      <td className="px-4 py-2 text-right">
+                        {r.shared_with_default ? (
+                          <span className="text-[10px] rounded bg-[var(--muted)]/40 text-[var(--muted-foreground)] px-1.5 py-0.5">
+                            shared
+                          </span>
+                        ) : (
+                          <span className="text-[10px] rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 px-1.5 py-0.5">
+                            custom
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-[11px] text-[var(--muted-foreground)]">
+              Override via env vars: <code className="font-mono">EXTRACTION_MODEL</code>,{" "}
+              <code className="font-mono">EXTRACTION_API_BASE</code>,{" "}
+              <code className="font-mono">RECONCILE_MODEL</code>, etc. Restart the Python
+              backend after changing.
+            </p>
+          </section>
+
+          {/* ── Live LLM call log ── */}
+          <section>
+            <SectionTitle>
+              Recent LLM calls — live ({(snapshot.recent_calls ?? []).length})
+            </SectionTitle>
+            {(snapshot.recent_calls ?? []).length === 0 ? (
+              <div className="rounded-lg border border-dashed bg-[var(--muted)]/30 px-4 py-6 text-sm text-center text-[var(--muted-foreground)]">
+                No LLM calls yet. Ingest something or ask a question to populate.
+              </div>
+            ) : (
+              <div className="rounded-lg border bg-[var(--card)] overflow-hidden">
+                <table className="w-full text-[12px]">
+                  <thead>
+                    <tr className="border-b bg-[var(--muted)]/30 text-[10px] uppercase tracking-widest text-[var(--muted-foreground)]">
+                      <th className="text-left px-3 py-2">Time</th>
+                      <th className="text-left px-3 py-2">Task</th>
+                      <th className="text-left px-3 py-2">Model</th>
+                      <th className="text-right px-3 py-2">Latency</th>
+                      <th className="text-right px-3 py-2">Prompt tok</th>
+                      <th className="text-right px-3 py-2">Out tok</th>
+                      <th className="text-left px-3 py-2">Note</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(snapshot.recent_calls ?? [])
+                      .slice()
+                      .reverse()
+                      .slice(0, 25)
+                      .map((c, i) => (
+                        <tr
+                          key={`${c.ts}-${i}`}
+                          className={`border-b last:border-0 ${!c.ok ? "bg-red-50 dark:bg-red-950/20" : ""}`}
+                        >
+                          <td className="px-3 py-1.5 text-[10px] font-mono text-[var(--muted-foreground)] whitespace-nowrap">
+                            {new Date(c.ts).toLocaleTimeString()}
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <span
+                              className={`text-[10px] font-mono rounded px-1.5 py-0.5 ${TASK_TINT[c.task] ?? "bg-[var(--muted)]/40"}`}
+                            >
+                              {c.task}
+                            </span>
+                          </td>
+                          <td className="px-3 py-1.5 font-mono text-[10px] text-[var(--muted-foreground)] truncate max-w-[180px]">
+                            {c.model}
+                          </td>
+                          <td className="px-3 py-1.5 text-right font-mono">{c.latency_ms} ms</td>
+                          <td className="px-3 py-1.5 text-right font-mono text-[var(--muted-foreground)]">
+                            {c.prompt_tokens ?? "—"}
+                          </td>
+                          <td className="px-3 py-1.5 text-right font-mono text-[var(--muted-foreground)]">
+                            {c.completion_tokens ?? "—"}
+                          </td>
+                          <td className="px-3 py-1.5 text-[10px] text-[var(--muted-foreground)] truncate max-w-[260px]">
+                            {c.ok ? c.note : `❌ ${c.note}`}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="mt-2 text-[11px] text-[var(--muted-foreground)]">
+              In-process log — last 80 calls across extraction, reconcile, execute, feedback,
+              and VLM. Refreshes every {REFRESH_MS / 1000}s. Resets when the Python backend restarts.
+            </p>
           </section>
 
           {/* ── AMD pitch callout ── */}

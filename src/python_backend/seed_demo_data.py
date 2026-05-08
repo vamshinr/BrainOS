@@ -35,19 +35,19 @@ def entry(source_type, author, content, days_ago=0, hours_ago=0, tags=None, supe
     }
 
 
-# ─────────────────────────────────────────────
+# =========================================
 # PEOPLE & ORG CHART  (gives the graph its edges)
-# ─────────────────────────────────────────────
+# =========================================="
 
 ORG_CHART = [
     entry("notion", "HR System", """
-COMPANY ORG CHART — Updated May 2026
+COMPANY ORG CHART -- Updated May 2026
 
 Executive Team:
 - CEO: Jordan Blake  (jordan@company.com)
 - CTO: Carol Singh   (carol@company.com)
 - CFO: Marcus Webb   (marcus@company.com)
-- VP Sales: [VACANT — Sarah Chen departed April 2026]
+- VP Sales: [VACANT -- Sarah Chen departed April 2026]
 - VP Product: Priya Nair (priya@company.com)
 
 Engineering (reports to CTO Carol Singh):
@@ -58,12 +58,12 @@ Engineering (reports to CTO Carol Singh):
 - Senior Engineers: Kai Okonkwo, Yuki Tanaka, Bruno Ferreira
 
 Customer Success (reports to CEO temporarily, was under VP Sales):
-- Head of CS: Alice Chen (alice@company.com) — ACTING VP Sales duties for accounts <$50k ARR
+- Head of CS: Alice Chen (alice@company.com) -- ACTING VP Sales duties for accounts <$50k ARR
 - Support Leads: Preet Kaur, Miguel Reyes
-- Enterprise Accounts (>$50k ARR): Dave Okafor (dave@company.com) — TEMPORARY until new VP Sales joins
+- Enterprise Accounts (>$50k ARR): Dave Okafor (dave@company.com) -- TEMPORARY until new VP Sales joins
 
 Finance (reports to CFO Marcus Webb):
-- Finance Lead: Dave Okafor (dave@company.com) — NOTE: Dave covers both Finance and temp Enterprise Accounts
+- Finance Lead: Dave Okafor (dave@company.com) -- NOTE: Dave covers both Finance and temp Enterprise Accounts
 - AP/AR: Elena Vasquez (elena@company.com)
 
 Legal & Compliance:
@@ -75,38 +75,38 @@ by Dave Okafor (Finance) AND Jordan Blake (CEO) until new VP Sales is onboarded.
 """, days_ago=2, tags=["org_chart", "ownership", "enterprise", "contracts"]),
 
     entry("slack", "Dave Okafor", """
-#general — pinned message
+#general -- pinned message
 
-Hey everyone — just to clarify the current situation with enterprise accounts now that 
+Hey everyone -- just to clarify the current situation with enterprise accounts now that 
 Sarah is gone. Until the new VP Sales joins (expected June 15):
-- Deals <$50k ARR → Alice Chen handles
-- Deals $50k–$200k ARR → me (Dave) handles, needs Marcus approval for discounts
-- Deals >$200k ARR → escalate directly to Jordan (CEO), cc me and Nadia (Legal)
+- Deals <$50k ARR -> Alice Chen handles
+- Deals $50k-$200k ARR -> me (Dave) handles, needs Marcus approval for discounts
+- Deals >$200k ARR -> escalate directly to Jordan (CEO), cc me and Nadia (Legal)
 
 Please do NOT promise any SLAs to enterprise clients without checking with Alice first 
 on what we can actually deliver right now. We're stretched thin.
 """, days_ago=5, tags=["ownership", "enterprise", "escalation", "sales"]),
 ]
 
-# ─────────────────────────────────────────────
+# =========================================
 # REFUND & BILLING POLICY (includes a conflict + supersession)
-# ─────────────────────────────────────────────
+# =========================================="
 
 REFUND_POLICY = [
     entry("notion", "Alice Chen", """
-REFUND POLICY v2.1 — Effective March 1, 2026
+REFUND POLICY v2.1 -- Effective March 1, 2026
 Owner: Alice Chen (Head of CS)
 Approved by: Marcus Webb (CFO)
 
 Standard Refunds:
-- Unused product, request within 30 days → automatic approval via Stripe portal
-- Partially used, within 30 days → 50% refund, requires Support Lead approval
-- Any request 31–90 days → manual review, requires Alice Chen approval
-- Requests >90 days → denied by default, escalate to Marcus Webb if customer is Enterprise tier
+- Unused product, request within 30 days -> automatic approval via Stripe portal
+- Partially used, within 30 days -> 50 percent refund, requires Support Lead approval
+- Any request 31-90 days -> manual review, requires Alice Chen approval
+- Requests >90 days -> denied by default, escalate to Marcus Webb if customer is Enterprise tier
 
 Double-Charge Policy:
-- Any verified double-charge → full refund, no questions, process within 24 hours
-- Use Stripe Dashboard: Customers → [Customer ID] → Payments → Refund
+- Any verified double-charge -> full refund, no questions, process within 24 hours
+- Use Stripe Dashboard: Customers -> [Customer ID] -> Payments -> Refund
 - Always send template CX-REFUND-CONFIRM to customer after processing
 - Create Jira ticket under CS-REFUND project with order ID in title
 
@@ -120,9 +120,9 @@ Enterprise SLA on refunds:
 """, days_ago=67, tags=["refund", "billing", "policy", "alice", "finance"]),
 
     entry("slack", "Alice Chen", """
-#support-ops — IMPORTANT UPDATE
+#support-ops -- IMPORTANT UPDATE
 
-Team — small but critical update to the refund policy. Legal flagged an issue 
+Team -- small but critical update to the refund policy. Legal flagged an issue 
 with how we were handling EU customers. Effective immediately:
 
 EU customers (identified by billing country in Stripe) requesting refunds within 14 days 
@@ -138,9 +138,9 @@ Nadia confirmed this is legally required. Don't push back on EU customers on thi
     entry("email", "Marcus Webb", """
 To: Alice Chen, Dave Okafor
 CC: Jordan Blake
-Subject: Refund Authority Limits — UPDATED
+Subject: Refund Authority Limits -- UPDATED
 
-Alice, Dave —
+Alice, Dave --
 
 Following the board review last week, we're tightening the refund authority limits:
 
@@ -163,13 +163,13 @@ Marcus
 """, days_ago=6, tags=["refund", "authority", "billing", "limits", "policy_update"]),
 ]
 
-# ─────────────────────────────────────────────
-# PRICING & DISCOUNTS (multi-hop: Sales → Finance → Legal)
-# ─────────────────────────────────────────────
+# =========================================
+# PRICING & DISCOUNTS (multi-hop: Sales -> Finance -> Legal)
+# =========================================="
 
 PRICING_POLICY = [
     entry("notion", "Priya Nair", """
-PRICING TIERS — Product v3.0 (Updated April 2026)
+PRICING TIERS -- Product v3.0 (Updated April 2026)
 Owner: Priya Nair (VP Product)
 Revenue modeling: Marcus Webb (CFO)
 
@@ -197,8 +197,8 @@ Enterprise Plan: Custom pricing (base from $2,000/month)
 
 Discount Authority:
 - Up to 10%: Any AE (Account Executive) can apply
-- 11–20%: Sales Manager approval (currently Alice Chen acting)
-- 21–40%: VP Sales approval [VACANT — route to Dave Okafor + Marcus Webb]
+- 11-20%: Sales Manager approval (currently Alice Chen acting)
+- 21-40%: VP Sales approval [VACANT -- route to Dave Okafor + Marcus Webb]
 - Above 40%: CFO + CEO approval required
 - Startup Program (company <3 years, <15 employees): up to 40% without escalation,
   requires verification via Crunchbase + LinkedIn. Document in Salesforce.
@@ -207,7 +207,7 @@ Discount Authority:
     entry("slack", "Dave Okafor", """
 #sales-team
 
-Heads up on the startup program — we've had a few people applying it too broadly.
+Heads up on the startup program -- we've had a few people applying it too broadly.
 The startup discount is ONLY for companies that meet ALL three criteria:
 1. Founded within the last 3 years (check Crunchbase founding date)
 2. Fewer than 15 full-time employees (check LinkedIn)
@@ -220,9 +220,9 @@ discounts to VC-backed companies that clearly didn't need it. Not happening agai
 
     entry("email", "Nadia Petrov", """
 To: Sales Team, Alice Chen, Dave Okafor
-Subject: Contract Terms — Do Not Deviate Without Legal Review
+Subject: Contract Terms -- Do Not Deviate Without Legal Review
 
-Team —
+Team --
 
 I've noticed several recent contracts going out with non-standard payment terms. 
 A reminder of what requires Legal review before sending:
@@ -247,9 +247,9 @@ Nadia
 """, days_ago=22, tags=["legal", "contracts", "enterprise", "compliance"]),
 ]
 
-# ─────────────────────────────────────────────
+# =========================================
 # ENGINEERING: INCIDENTS, DEPLOYMENTS, RUNBOOKS
-# ─────────────────────────────────────────────
+# =========================================="
 
 ENGINEERING = [
     entry("notion", "Carol Singh", """
@@ -258,7 +258,7 @@ Owner: Carol Singh (CTO)
 Last updated: April 2026
 
 SEVERITY LEVELS:
-- P0 (Outage): >25% of users cannot access core product. Revenue impact.
+- P0 (Outage): >25 percent of users cannot access core product. Revenue impact.
 - P1 (Critical): Core feature broken for significant user segment.
 - P2 (High): Important feature degraded, workaround exists.
 - P3 (Medium): Minor feature broken, low user impact.
@@ -266,10 +266,10 @@ SEVERITY LEVELS:
 
 P0/P1 RESPONSE PROTOCOL:
 1. On-call engineer pages #incidents Slack channel immediately
-2. Page Carol Singh (CTO) via PagerDuty — ID: carol-singh-oncall
+2. Page Carol Singh (CTO) via PagerDuty -- ID: carol-singh-oncall
 3. Incident Commander role assigned (rotating: Sam Torres, Rajan Mehta, David Lee)
 4. War room opened: Slack #incident-YYYYMMDD-[brief-description]
-5. Status page updated at status.company.com within 15 MINUTES — no exceptions
+5. Status page updated at status.company.com within 15 MINUTES -- no exceptions
 6. Customer-facing comms: Alice Chen notified to prepare support messaging
 7. Executive update to Jordan Blake every 30 minutes until resolved
 8. Resolution: post-mortem REQUIRED within 48 hours (template: Notion/Engineering/Postmortems)
@@ -332,8 +332,8 @@ MULTIPLE MODEL SERVING (leveraging 192GB VRAM):
 
 MONITORING:
 - GPU utilization: watch -n 1 rocm-smi
-- Temperature limits: throttles at 95°C, shutdown at 105°C
-- Alert Sam Torres if sustained >85°C during inference load tests
+- Temperature limits: throttles at 95C, shutdown at 105C
+- Alert Sam Torres if sustained >85C during inference load tests
 """, days_ago=20, tags=["amd", "mi300x", "vllm", "rocm", "deployment", "ml"]),
 
     entry("slack", "Rajan Mehta", """
@@ -342,19 +342,19 @@ MONITORING:
 Important update on the embedding model situation. We switched from text-embedding-ada-002 
 to BAAI/bge-m3 for all internal retrieval last week. Performance comparison:
 
-Ada-002: 68.4% retrieval accuracy on our internal eval set
-BGE-M3: 79.1% retrieval accuracy (+10.7 points)
+Ada-002: 68.4 percent retrieval accuracy on our internal eval set
+BGE-M3: 79.1 percent retrieval accuracy (+10.7 points)
 
 BGE-M3 also supports multilingual out of the box which matters for our EU expansion.
 The model runs locally on MI300X so no API costs. Latency is ~8ms per embedding vs
 ~45ms via OpenAI API. 
 
-Updated the embedding client in core/llm_client.py — if you're still using ada-002
+Updated the embedding client in core/llm_client.py -- if you're still using ada-002
 anywhere please switch. The old endpoint is being deprecated June 1.
 """, days_ago=8, tags=["ml", "embeddings", "bge", "performance", "migration"]),
 
     entry("slack", "David Lee", """
-#engineering — CRITICAL
+#engineering -- CRITICAL
 
 We had a near-miss on production yesterday. Someone ran a migration script directly 
 on prod DB without going through the standard process. We got lucky that it was 
@@ -370,17 +370,17 @@ Reminder of the production DB access protocol:
 This is non-negotiable. Next violation = immediate access revocation.
 DB credentials are in 1Password. If you don't have access you shouldn't be touching prod.
 
-—David
+--David
 """, days_ago=3, tags=["database", "production", "protocol", "security", "engineering"]),
 
     entry("notion", "Fatima Al-Rashid", """
-SECURITY POLICY — ACCESS CONTROL & CREDENTIALS
+SECURITY POLICY -- ACCESS CONTROL & CREDENTIALS
 Owner: Fatima Al-Rashid (Security Lead)
 Classification: INTERNAL
 
 PASSWORD & CREDENTIAL MANAGEMENT:
 - ALL credentials must be in 1Password (company account)
-- No credentials in Slack, email, Notion, or code repositories — ever
+- No credentials in Slack, email, Notion, or code repositories -- ever
 - Rotate API keys every 90 days (automated reminder via 1Password)
 - Shared credentials require approval from Fatima + relevant team lead
 
@@ -407,13 +407,13 @@ PENETRATION TESTING:
 """, days_ago=35, tags=["security", "credentials", "mfa", "access_control", "policy"]),
 ]
 
-# ─────────────────────────────────────────────
+# =========================================
 # CUSTOMER SLA & SUPPORT
-# ─────────────────────────────────────────────
+# =========================================="
 
 CUSTOMER_SLA = [
     entry("notion", "Alice Chen", """
-CUSTOMER SLA MATRIX — Updated May 2026
+CUSTOMER SLA MATRIX -- Updated May 2026
 Owner: Alice Chen (Head of CS)
 Approved by: Jordan Blake (CEO)
 
@@ -431,7 +431,7 @@ Pro Plan:
 - P3/P4 issues: First response within 1 business day
 - Support channel: Email + in-app chat
 - Uptime SLA: 99.5% monthly (excluding scheduled maintenance)
-- Credit: 10% monthly fee for each 1% below SLA
+- Credit: 10% monthly fee for each 1 percent below SLA
 
 Enterprise Plan:
 - P1 issues: First response within 1 hour (24/7)
@@ -440,14 +440,14 @@ Enterprise Plan:
 - P4 issues: First response within 1 business day
 - Support channel: Email + in-app chat + dedicated Slack channel + phone
 - Uptime SLA: 99.9% monthly
-- Credit: 25% monthly fee per 1% below SLA
+- Credit: 25% monthly fee per 1 percent below SLA
 - Named CSM (Customer Success Manager) assigned
 
 ESCALATION PATH:
-Tier 1 (Preet, Miguel) → Tier 2 (Alice) → Tier 3 (David Lee for technical) → Carol (CTO)
+Tier 1 (Preet, Miguel) -> Tier 2 (Alice) -> Tier 3 (David Lee for technical) -> Carol (CTO)
 
 ENTERPRISE ESCALATION (>$50k ARR):
-Any enterprise customer threatening churn → immediate flag to Dave Okafor + Alice + Jordan
+Any enterprise customer threatening churn -> immediate flag to Dave Okafor + Alice + Jordan
 Response time: Dave/Alice connect with customer within 2 business hours
 
 NOTE: We currently have 3 enterprise customers on named CSM model:
@@ -459,20 +459,20 @@ NOTE: We currently have 3 enterprise customers on named CSM model:
     entry("email", "Jordan Blake", """
 To: Alice Chen, Dave Okafor
 CC: Carol Singh, Marcus Webb
-Subject: TerraCore Industries — URGENT — Escalation
+Subject: TerraCore Industries -- URGENT -- Escalation
 
-Alice, Dave —
+Alice, Dave --
 
 Just got off a call with TerraCore's CTO. They're experiencing P1-level issues with 
 our API integration and have been waiting 3 hours without resolution. This is a $280k ARR 
-account — our single largest customer.
+account -- our single largest customer.
 
 Their technical contact is Wei Zhang (wei.zhang@terracore.com). Their engineering lead
 is going to have a call with Carol and Sam at 3pm today to debug.
 
-Alice — please send an immediate apology from the company level, not just support level.
-Dave — I need you to prepare a credit proposal. Given our SLA breach I'd suggest 
-a 20% credit on their next invoice. Run it by Marcus first.
+Alice -- please send an immediate apology from the company level, not just support level.
+Dave -- I need you to prepare a credit proposal. Given our SLA breach I'd suggest 
+a 20 percent credit on their next invoice. Run it by Marcus first.
 
 This cannot happen again with TerraCore. If we lose them that's a material revenue impact.
 I'm adding this to Monday's exec standup agenda.
@@ -491,39 +491,39 @@ usage pattern is Enterprise-level.
 
 Current workaround Alice approved:
 - We've whitelisted their IP range (10.42.0.0/16) for 2x rate limits temporarily
-- This is NOT documented in their contract — it's a goodwill gesture
+- This is NOT documented in their contract -- it's a goodwill gesture
 - Expires June 30, 2026 unless renewed
 - Contact at Apex: Rajesh Patel (r.patel@apexlogistics.com)
 
 We should either upgrade them to Enterprise or formalize the rate limit increase.
-Dave is aware — this came up in the renewal conversation last month.
+Dave is aware -- this came up in the renewal conversation last month.
 """, days_ago=9, tags=["customer", "apex_logistics", "rate_limit", "workaround", "sla"]),
 ]
 
-# ─────────────────────────────────────────────
+# =========================================
 # HR & ONBOARDING
-# ─────────────────────────────────────────────
+# =========================================="
 
 HR_POLICY = [
     entry("notion", "HR System", """
-EMPLOYEE ONBOARDING CHECKLIST — Week 1
+EMPLOYEE ONBOARDING CHECKLIST -- Week 1
 Owner: Emma Davis (HR, outsourced to PeopleFirst Partners)
 Contact: hr@peoplefirst.com | Internal coord: Jordan Blake's EA (Jamie)
 
 DAY 1:
-□ Equipment pickup from IT (Sam Torres handles, submit request 48h in advance via help@company.com)
-□ Google Workspace account creation (IT ticket)
-□ 1Password onboarding (Fatima Al-Rashid sends invite)
-□ Security training module in Workday (mandatory, 2 hours, must complete Day 1)
-□ Employee handbook signature (DocuSign, sent by PeopleFirst)
-□ Slack workspace invite + add to #general, #random, #team-[department]
+[ ] Equipment pickup from IT (Sam Torres handles, submit request 48h in advance via help@company.com)
+[ ] Google Workspace account creation (IT ticket)
+[ ] 1Password onboarding (Fatima Al-Rashid sends invite)
+[ ] Security training module in Workday (mandatory, 2 hours, must complete Day 1)
+[ ] Employee handbook signature (DocuSign, sent by PeopleFirst)
+[ ] Slack workspace invite + add to #general, #random, #team-[department]
 
 WEEK 1:
-□ Shadow your manager for 2 days
-□ Meet your skip-level (30-min coffee chat, manager schedules)
-□ Complete product walkthrough (Priya Nair runs this every Monday 2pm)
-□ Set up local dev environment (Engineering only — see Notion/Engineering/Dev-Setup)
-□ Complete GDPR/data handling training (Fatima sends link)
+[ ] Shadow your manager for 2 days
+[ ] Meet your skip-level (30-min coffee chat, manager schedules)
+[ ] Complete product walkthrough (Priya Nair runs this every Monday 2pm)
+[ ] Set up local dev environment (Engineering only -- see Notion/Engineering/Dev-Setup)
+[ ] Complete GDPR/data handling training (Fatima sends link)
 
 EQUIPMENT:
 - MacBook Pro 14" (default) or 16" for engineering roles
@@ -531,26 +531,26 @@ EQUIPMENT:
 - Equipment requests >$500 need manager approval in Workday
 
 SYSTEM ACCESS (submit request via IT ticket):
-- GitHub (Engineering, Product) — David Lee approves
-- AWS console (Engineering) — Sam Torres approves, Fatima audits
-- Stripe (Finance, CS leads only) — Marcus Webb approves
-- Salesforce (Sales, CS) — Alice Chen approves for CS, Dave for Finance
+- GitHub (Engineering, Product) -- David Lee approves
+- AWS console (Engineering) -- Sam Torres approves, Fatima audits
+- Stripe (Finance, CS leads only) -- Marcus Webb approves
+- Salesforce (Sales, CS) -- Alice Chen approves for CS, Dave for Finance
 - Production systems: additional security review, Fatima sign-off required
 """, days_ago=60, tags=["onboarding", "hr", "new_hire", "access", "equipment"]),
 
     entry("slack", "Carol Singh", """
 #engineering
 
-For the new engineers joining next month (we have 3 starting June 2 — Yuki Tanaka,
+For the new engineers joining next month (we have 3 starting June 2 -- Yuki Tanaka,
 Bruno Ferreira, and one more TBD from the current interview loop):
 
 Please make sure you've documented your systems before they join. We have a habit of 
 onboarding people and then expecting them to just figure things out. 
 
 Specifically I need:
-1. Sam — update the platform setup guide in Notion (it's 8 months out of date)
-2. Rajan — document the ML pipeline end to end, not just the model serving part
-3. David — write up the DB schema overview doc we keep promising
+1. Sam -- update the platform setup guide in Notion (it's 8 months out of date)
+2. Rajan -- document the ML pipeline end to end, not just the model serving part
+3. David -- write up the DB schema overview doc we keep promising
 
 These need to be done by May 28. I'm blocking time on everyone's calendar.
 
@@ -559,54 +559,54 @@ their engineering buddy. Priya will run them through the product side.
 """, days_ago=4, tags=["onboarding", "engineering", "documentation", "hiring"]),
 ]
 
-# ─────────────────────────────────────────────
+# =========================================
 # PRODUCT & ROADMAP (creates cross-domain refs)
-# ─────────────────────────────────────────────
+# =========================================="
 
 PRODUCT = [
     entry("notion", "Priya Nair", """
-PRODUCT ROADMAP — Q2/Q3 2026
+PRODUCT ROADMAP -- Q2/Q3 2026
 Owner: Priya Nair (VP Product)
 Last reviewed: Jordan Blake, Carol Singh, Marcus Webb
 
-Q2 2026 (April–June) — IN PROGRESS:
-✅ Multi-modal input (image + text) — Rajan leading, targeting May 31
-🔄 EU data residency (GDPR compliance) — Nadia + Sam, targeting June 15
-⏳ Enterprise SSO (SAML/OIDC) — David Lee, targeting June 30
-⏳ API v3 (GraphQL) — Kai Okonkwo leading, replaces REST v2 by Q4
+Q2 2026 (April-June) -- IN PROGRESS:
+[DONE] Multi-modal input (image + text) -- Rajan leading, targeting May 31
+[IN-PROGRESS] EU data residency (GDPR compliance) -- Nadia + Sam, targeting June 15
+[PENDING] Enterprise SSO (SAML/OIDC) -- David Lee, targeting June 30
+[PENDING] API v3 (GraphQL) -- Kai Okonkwo leading, replaces REST v2 by Q4
 
-Q3 2026 (July–September):
+Q3 2026 (July-September):
 - Offline mode for Pro+ plans
 - Advanced analytics dashboard
-- Salesforce native integration (HIGH PRIORITY — multiple enterprise requests)
+- Salesforce native integration (HIGH PRIORITY -- multiple enterprise requests)
 - Mobile app v2.0 (iOS + Android)
 
 PRICING IMPACT (from Marcus, May 2026):
-- EU data residency → adds $200/month to Enterprise plans starting July 1
-- Enterprise SSO → included in Enterprise, add-on for Pro ($49/month)
-- API v3 → no pricing change, v2 deprecated December 2026
+- EU data residency -> adds $200/month to Enterprise plans starting July 1
+- Enterprise SSO -> included in Enterprise, add-on for Pro ($49/month)
+- API v3 -> no pricing change, v2 deprecated December 2026
 
 DEPENDENCIES TO FLAG:
 - Salesforce integration blocked on legal review of data sharing terms (Nadia)
-- Mobile v2.0 blocked on hiring — need 2 mobile engineers (Jamie is recruiting)
-- API v3 timeline may slip — Kai is also on EU data residency work
+- Mobile v2.0 blocked on hiring -- need 2 mobile engineers (Jamie is recruiting)
+- API v3 timeline may slip -- Kai is also on EU data residency work
 """, days_ago=7, tags=["product", "roadmap", "enterprise", "q2", "q3", "pricing"]),
 
     entry("email", "Kai Okonkwo", """
 To: David Lee, Priya Nair, Sam Torres
-Subject: API v2 → v3 Migration — Breaking Changes
+Subject: API v2 -> v3 Migration -- Breaking Changes
 
-Team —
+Team --
 
 Quick heads up on the breaking changes in API v3 that we need to document before 
 we communicate to customers:
 
-BREAKING CHANGES (v2 → v3):
+BREAKING CHANGES (v2 -> v3):
 1. Auth: Bearer tokens replace API keys. Old API keys work until Dec 31, 2026.
    New token endpoint: POST /v3/auth/token
    
-2. Pricing endpoint moved: /v2/pricing → /v3/catalog/pricing
-   (this was already partially moved per Bob's email last month — /v1/prices is dead)
+2. Pricing endpoint moved: /v2/pricing -> /v3/catalog/pricing
+   (this was already partially moved per Bob's email last month -- /v1/prices is dead)
    
 3. Pagination: cursor-based replaces offset-based. Response format change:
    Old: { "data": [], "total": 100, "offset": 0 }
@@ -616,26 +616,26 @@ BREAKING CHANGES (v2 → v3):
    Old webhooks continue working until June 30, 2026 then REQUIRE migration
 
 CUSTOMERS AFFECTED: All 847 API customers. Enterprise customers need direct outreach.
-Alice — can your team flag which enterprise accounts are heavy API users?
-David — need migration guide written before we send the customer email (targeting May 15).
+Alice -- can your team flag which enterprise accounts are heavy API users?
+David -- need migration guide written before we send the customer email (targeting May 15).
 
 Kai
 """, days_ago=5, tags=["api", "migration", "breaking_changes", "v3", "customers", "engineering"]),
 ]
 
-# ─────────────────────────────────────────────
+# =========================================
 # FINANCE & PROCUREMENT
-# ─────────────────────────────────────────────
+# =========================================="
 
 FINANCE = [
     entry("notion", "Marcus Webb", """
-PROCUREMENT POLICY — Updated Q1 2026
+PROCUREMENT POLICY -- Updated Q1 2026
 Owner: Marcus Webb (CFO)
 
 SOFTWARE/SAAS PROCUREMENT:
 - <$500/year: Team lead can approve, log in Notion/Finance/Software-Registry
-- $500–$5,000/year: Department head approval, Marcus notified
-- $5,000–$25,000/year: Marcus Webb approval + Jordan Blake awareness
+- $500-$5,000/year: Department head approval, Marcus notified
+- $5,000-$25,000/year: Marcus Webb approval + Jordan Blake awareness
 - >$25,000/year: Board notification required (quarterly review)
 
 HARDWARE PROCUREMENT:
@@ -661,14 +661,14 @@ EXPENSE REPORTING:
 - Conference/travel: submit Travel Request in Workday minimum 2 weeks ahead
 
 CURRENT BUDGET ALERTS (May 2026):
-- ML infrastructure (AMD cloud): 78% of Q2 budget used (watch closely — Rajan alerted)
-- Marketing: underspent (42% of Q2 budget, Priya to advise reallocation)
+- ML infrastructure (AMD cloud): 78 percent of Q2 budget used (watch closely -- Rajan alerted)
+- Marketing: underspent (42 percent of Q2 budget, Priya to advise reallocation)
 """, days_ago=55, tags=["finance", "procurement", "budget", "vendor", "hardware"]),
 
     entry("slack", "Rajan Mehta", """
 #ml-platform
 
-Heads up to Marcus and Sam — we're burning through the AMD cloud credits faster
+Heads up to Marcus and Sam -- we're burning through the AMD cloud credits faster
 than expected. The BrainOS prototype has been running 24/7 on the MI300X instance 
 for load testing and we didn't account for that in the Q2 budget.
 
@@ -678,19 +678,19 @@ instance was left running overnight a few times, my bad).
 Options I see:
 1. Switch to reserved pricing ($4.20/hr) if we're committed to running this through Q3
 2. Use spot instances for non-critical testing (risk of interruption)
-3. Add GPU scheduling — only run the full 70B model during business hours,
+3. Add GPU scheduling -- only run the full 70B model during business hours,
    use a smaller 8B model overnight for background jobs
 
 I'm going with option 3 starting tomorrow unless someone objects.
 Tagging Sam to update the deployment scripts.
 
-Marcus — expect an overage of ~$2,800 vs Q2 ML budget. Sorry, will be more careful.
+Marcus -- expect an overage of ~$2,800 vs Q2 ML budget. Sorry, will be more careful.
 """, days_ago=2, tags=["finance", "budget", "amd", "ml", "cloud_costs"]),
 ]
 
-# ─────────────────────────────────────────────
+# =========================================
 # KNOWLEDGE GAPS (these intentionally trigger low-confidence in the execution agent)
-# ─────────────────────────────────────────────
+# =========================================="
 
 GAPS_AND_CONFLICTS = [
     entry("slack", "Miguel Reyes", """
@@ -707,7 +707,7 @@ Alice mentioned there was a special data handling addendum but I can't find it i
     entry("slack", "Bruno Ferreira", """
 #engineering
 
-Wait — what's the current state of the Pricing API? I see references to:
+Wait -- what's the current state of the Pricing API? I see references to:
 - /v1/prices (mentioned in old docs as deprecated)
 - /v2/pricing (Bob's email said this was new as of last Tuesday)
 - /v3/catalog/pricing (Kai's email about v3 migration)
@@ -719,7 +719,7 @@ been updated. Can someone clarify?
     entry("slack", "Sam Torres", """
 #general
 
-Genuine question — who do we contact for the AMD Developer Cloud billing issues?
+Genuine question -- who do we contact for the AMD Developer Cloud billing issues?
 We had a credit discrepancy last month that Marcus flagged but I'm not sure if it goes
 through our usual AWS support process or AMD has a separate account manager.
 
@@ -729,14 +729,14 @@ credits but I can't find the confirmation email.
 """, days_ago=3, tags=["amd", "billing", "vendor", "gap"], confidence=0.4),
 ]
 
-# ─────────────────────────────────────────────
+# =========================================
 # DEPRECATED / SUPERSEDED KNOWLEDGE (tests the brain's recency awareness)
-# ─────────────────────────────────────────────
+# =========================================="
 
 DEPRECATED = [
     entry("notion", "Old System", """
 [DEPRECATED - DO NOT USE]
-REFUND POLICY v1.0 — Pre-March 2026
+REFUND POLICY v1.0 -- Pre-March 2026
 
 All refund requests processed manually. Support lead submits request to finance@company.com.
 Finance team reviews within 5 business days. No automatic approvals.
@@ -751,9 +751,9 @@ Make sure to include the API key in the X-API-Key header.
 """, days_ago=45, tags=["api", "pricing", "deprecated"], confidence=0.1),
 ]
 
-# ─────────────────────────────────────────────
+# =========================================
 # ASSEMBLE EVERYTHING
-# ─────────────────────────────────────────────
+# =========================================="
 
 ALL_DATA = (
     ORG_CHART +
@@ -772,10 +772,10 @@ ALL_DATA = (
 mid = len(ALL_DATA) // 2
 ALL_DATA = ALL_DATA[1:mid] + ALL_DATA[:1] + ALL_DATA[mid:]
 
-# ─────────────────────────────────────────────
+# =========================================
 # KNOWLEDGE GRAPH RELATIONS
-# (explicit entity links for NetworkX — supplements the vector store)
-# ─────────────────────────────────────────────
+# (explicit entity links for NetworkX -- supplements the vector store)
+# =========================================="
 
 KNOWLEDGE_GRAPH = {
     "entities": [
@@ -839,7 +839,7 @@ KNOWLEDGE_GRAPH = {
         {"from": "refund_policy",   "to": "marcus_webb",  "rel": "approved_by"},
         {"from": "pricing_policy",  "to": "marcus_webb",  "rel": "revenue_modeled_by"},
         {"from": "pricing_policy",  "to": "jordan_blake", "rel": "approved_by"},
-        # Customer → CSM
+        # Customer -> CSM
         {"from": "terracore",      "to": "alice_chen",    "rel": "csm_assigned"},
         {"from": "apex_logistics", "to": "preet_kaur",    "rel": "csm_assigned"},
         {"from": "meridian_fin",   "to": "miguel_reyes",  "rel": "csm_assigned"},
@@ -884,7 +884,7 @@ KNOWLEDGE_GRAPH = {
         },
         {
             "id": "eu_refund_override",
-            "description": "Standard 30-day refund policy conflicts with EU consumer law 14-day digital product rule. EU customers get automatic refund within 14 days — this overrides the standard policy.",
+            "description": "Standard 30-day refund policy conflicts with EU consumer law 14-day digital product rule. EU customers get automatic refund within 14 days -- this overrides the standard policy.",
             "entities_involved": ["refund_policy", "nadia_petrov"],
             "resolution": "EU digital product: 14-day automatic. Non-EU / physical: standard 30-day policy.",
             "severity": "high"
@@ -893,31 +893,31 @@ KNOWLEDGE_GRAPH = {
             "id": "meridian_compliance_gap",
             "description": "Meridian Financial has SOC2 + data residency requirements in their contract addendum that is not documented in Notion. Support team unaware of special handling requirements.",
             "entities_involved": ["meridian_fin", "miguel_reyes", "nadia_petrov"],
-            "resolution": "UNRESOLVED — addendum must be located and documented.",
+            "resolution": "UNRESOLVED -- addendum must be located and documented.",
             "severity": "critical"
         }
     ]
 }
 
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 # DEMO TASKS (printed for human to test against /execute)
-# ─────────────────────────────────────────────
+# ---------------------------------------------
 
 DEMO_TASKS = [
-    # High confidence — should execute cleanly
+    # High confidence -- should execute cleanly
     "A customer was charged twice for order #8821. They're on the Pro plan. Handle it.",
     "TerraCore Industries is threatening to churn. What's the escalation protocol?",
-    "A P1 incident just hit — the API is returning 500s for 30% of users. What do I do?",
-    "Sales wants to give a 45% discount to a 2-year-old startup with 8 employees. Is this allowed?",
+    "A P1 incident just hit -- the API is returning 500s for 30 percent of users. What do I do?",
+    "Sales wants to give a 45 percent discount to a 2-year-old startup with 8 employees. Is this allowed?",
     "A new engineer starts Monday. What does their Day 1 look like?",
     "The MI300X instance is throwing HIP error 712. How do I fix it?",
-    # Medium confidence — should retrieve but may flag gaps
+    # Medium confidence -- should retrieve but may flag gaps
     "An EU customer wants a refund 10 days after buying a digital subscription.",
     "Who approves a $15,000 software procurement request?",
     "Apex Logistics is hitting rate limits again at 2am UTC. What's the current workaround?",
-    # Low confidence — should trigger gap detection
+    # Low confidence -- should trigger gap detection
     "What are Meridian Financial's special compliance requirements for support tickets?",
-    "Which pricing API endpoint should I use right now — v1, v2, or v3?",
+    "Which pricing API endpoint should I use right now -- v1, v2, or v3?",
     "Is our AMD Developer Cloud account enrolled in the AMD AI Developer Program?",
 ]
 
@@ -944,11 +944,11 @@ def generate():
     print("=" * 60)
     print("BrainOS Seed Data Generator")
     print("=" * 60)
-    print(f"\n✓ {len(ALL_DATA)} knowledge chunks → {sources_path}")
-    print(f"✓ {len(KNOWLEDGE_GRAPH['entities'])} entities, "
+    print(f"\n[OK] {len(ALL_DATA)} knowledge chunks -> {sources_path}")
+    print(f"[OK] {len(KNOWLEDGE_GRAPH['entities'])} entities, "
           f"{len(KNOWLEDGE_GRAPH['relations'])} relations, "
-          f"{len(KNOWLEDGE_GRAPH['conflicts'])} conflicts → {graph_path}")
-    print(f"✓ {len(DEMO_TASKS)} demo tasks → {tasks_path}")
+          f"{len(KNOWLEDGE_GRAPH['conflicts'])} conflicts -> {graph_path}")
+    print(f"[OK] {len(DEMO_TASKS)} demo tasks -> {tasks_path}")
 
     print("\nKnowledge breakdown:")
     source_counts = {}
@@ -967,14 +967,14 @@ def generate():
 
     print("\nConflicts seeded (will trigger gap detection):")
     for c in KNOWLEDGE_GRAPH["conflicts"]:
-        sev_icon = {"critical": "🔴", "high": "🟠", "medium": "🟡"}.get(c["severity"], "⚪")
+        sev_icon = {"critical": "[CRITICAL]", "high": "[HIGH]", "medium": "[MEDIUM]"}.get(c["severity"], "[INFO]")
         print(f"  {sev_icon} [{c['severity'].upper():8s}] {c['id']}")
 
     print("\nDemo tasks to test against /execute:")
     for i, task in enumerate(DEMO_TASKS, 1):
         print(f"  {i:2d}. {task}")
 
-    print("\n✓ Ready. Run: python scripts/seed_demo_data.py to ingest into BrainStore.")
+    print("\n[OK] Ready. Run: python scripts/seed_demo_data.py to ingest into BrainStore.")
 
 
 if __name__ == "__main__":

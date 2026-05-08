@@ -11,6 +11,7 @@ import threading
 import datetime
 import re
 import io
+import collections
 import uvicorn
 
 from openai import OpenAI
@@ -80,6 +81,149 @@ _vlm_model_env = os.getenv("VLM_MODEL_NAME", "llava-hf/llava-v1.6-mistral-7b-hf"
 
 MODEL_NAME = _resolve_model(llm_client, "MODEL_NAME", _model_env)
 VLM_MODEL_NAME = _resolve_model(vlm_client, "VLM_MODEL_NAME", _vlm_model_env)
+
+
+# ── Per-task model routing ────────────────────────────────────────────────────
+# Lets you split work across two (or more) backends/models. Defaults to the
+# global MODEL_NAME on VLLM_API_BASE for every task. Override individually:
+#
+#   EXTRACTION_MODEL=meta-llama/Llama-3.1-70B-Instruct
+#   EXTRACTION_API_BASE=http://gpu1:8000/v1
+#   RECONCILE_MODEL=Qwen/Qwen2.5-7B-Instruct
+#   RECONCILE_API_BASE=http://gpu2:8000/v1
+#   EXECUTE_MODEL=meta-llama/Llama-3.1-70B-Instruct  (defaults to MODEL_NAME)
+#   FEEDBACK_MODEL=Qwen/Qwen2.5-7B-Instruct          (defaults to MODEL_NAME)
+#   VLM_MODEL=...                                    (existing VLM_API_BASE/MODEL_NAME)
+#
+# Typical setup: heavy tasks (extraction, answer generation) on a 70B; light
+# audit tasks (reconcile, feedback) on a 7B running cheaper.
+TASKS = ["extraction", "reconcile", "execute", "feedback", "vlm"]
+
+
+class ModelRouter:
+    """Resolve (client, model) per task with per-task env overrides."""
+
+    def __init__(self):
+        self._client_cache: dict[str, OpenAI] = {
+            vllm_url: llm_client,
+            vlm_url: vlm_client,
+        }
+        self._routes: dict[str, tuple[OpenAI, str]] = {}
+        for task in TASKS:
+            self._routes[task] = self._resolve(task)
+
+    def _resolve(self, task: str) -> tuple[OpenAI, str]:
+        tu = task.upper()
+        # VLM has historic env var names
+        if task == "vlm":
+            return vlm_client, VLM_MODEL_NAME
+        api_base = os.getenv(f"{tu}_API_BASE", "").strip() or vllm_url
+        model = os.getenv(f"{tu}_MODEL", "").strip() or MODEL_NAME
+        if api_base not in self._client_cache:
+            self._client_cache[api_base] = OpenAI(
+                base_url=api_base,
+                api_key=os.getenv("OPENAI_API_KEY", "not-required"),
+            )
+        return self._client_cache[api_base], model
+
+    def get(self, task: str) -> tuple[OpenAI, str]:
+        return self._routes.get(task, (llm_client, MODEL_NAME))
+
+    def describe(self) -> list[dict]:
+        out = []
+        for task in TASKS:
+            client, model = self._routes[task]
+            base = str(client.base_url)
+            shared_with_default = base.rstrip("/") == vllm_url.rstrip("/")
+            out.append({
+                "task": task,
+                "model": model,
+                "endpoint": base,
+                "shared_with_default": shared_with_default,
+            })
+        return out
+
+
+router = ModelRouter()
+print("[BrainOS] Model routes:")
+for r in router.describe():
+    marker = "(default)" if r["shared_with_default"] else "(custom)"
+    print(f"  {r['task']:12s} → {r['model']} {marker}")
+
+
+# ── Model index — every model the user can select per-request ────────────────
+# Aggregates models served by every endpoint we know about (the default text
+# endpoint, the VLM endpoint, and any custom-route endpoints). Maps model id
+# → which OpenAI client serves it. Used by the per-request override path so
+# the dropdown on /ingest and /ask can show every reachable model.
+def _build_model_index() -> dict[str, OpenAI]:
+    index: dict[str, OpenAI] = {}
+    seen_endpoints: set[str] = set()
+
+    def _add(client: OpenAI):
+        base = str(client.base_url).rstrip("/")
+        if base in seen_endpoints:
+            return
+        seen_endpoints.add(base)
+        try:
+            for m in client.models.list().data:
+                if m.id not in index:
+                    index[m.id] = client
+        except Exception as e:
+            print(f"[BrainOS] Could not list models from {base}: {e}")
+
+    _add(llm_client)
+    _add(vlm_client)
+    for task in TASKS:
+        c, _ = router.get(task)
+        _add(c)
+    return index
+
+
+_MODEL_INDEX: dict[str, OpenAI] = _build_model_index()
+print(f"[BrainOS] Available models for per-request override: {sorted(_MODEL_INDEX.keys())}")
+
+
+def _resolve_override(task: str, model_override: str | None) -> tuple[OpenAI, str]:
+    """
+    Returns (client, model). If `model_override` is set and known, use it (with
+    its serving endpoint). Otherwise fall back to the routed default for the task.
+    """
+    if model_override:
+        client = _MODEL_INDEX.get(model_override)
+        if client is not None:
+            return client, model_override
+        print(f"[BrainOS] WARNING: requested model '{model_override}' not in index; "
+              f"falling back to {task} default.")
+    return router.get(task)
+
+
+# ── Recent-calls log (in-memory ring buffer, surfaced to the dashboard) ──────
+_call_log: collections.deque = collections.deque(maxlen=80)
+_call_lock = threading.Lock()
+
+
+def _log_call(
+    task: str,
+    model: str,
+    latency_ms: int,
+    *,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    ok: bool = True,
+    note: str = "",
+):
+    with _call_lock:
+        _call_log.append({
+            "ts": datetime.datetime.utcnow().isoformat() + "Z",
+            "task": task,
+            "model": model,
+            "latency_ms": latency_ms,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "ok": ok,
+            "note": note,
+        })
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 _project_root = os.path.abspath(
@@ -161,35 +305,87 @@ def _write_brain(state: dict):
             json.dump(state, f, indent=2)
 
 # ── Extraction system prompt ───────────────────────────────────────────────────
-EXTRACTION_SYSTEM = """You are the extraction layer of a Company Brain AI system.
-Turn raw company knowledge into structured, atomic, executable data.
+EXTRACTION_SYSTEM = """You are the extraction layer of a Company Brain — a system that
+turns scattered company knowledge into structured, atomic, executable data that AI agents
+can load and act on.
 
 Extract exactly THREE things:
 1. ENTITIES — every named person, team, system, product, tool, customer, or concept.
-2. KNOWLEDGE UNITS — atomic self-contained statements. Each must be independently understandable.
+2. KNOWLEDGE UNITS — atomic, self-contained statements an agent could act on alone.
 3. RELATIONSHIPS — directed edges that form the company knowledge graph.
 
-Unit kinds:
-  fact        – static info ("The billing API is on AWS us-east-1")
-  process     – how something is done ("Deploy by merging to main, then tagging v-prefix")
-  decision    – a choice made ("We chose Stripe over Adyen for v2")
-  ownership   – who owns something ("Alice owns the billing service")
-  definition  – what a term means ("P0 = customer-impacting outage")
-  policy      – a rule to follow ("All PRs need 2 reviewers")
-  gotcha      – non-obvious tribal knowledge ("Webhook handler silently drops if signature header missing")
+==================================================================================
+UNIT KINDS — pick exactly one per unit
+==================================================================================
+  fact        – static factual info ("The billing API runs on AWS us-east-1.")
+  process     – step-by-step how-to ("Deploy by merging to main, then tag v-prefix.")
+  decision    – a choice made ("We chose Stripe over Adyen for v2 because of EU coverage.")
+  ownership   – who owns/runs/maintains something ("Alice Chen owns billing-svc end-to-end.")
+  definition  – what an internal term means ("P0 = customer-impacting outage.")
+  policy      – a rule to follow ("All PRs require 2 reviewers before merge.")
+  gotcha      – non-obvious tribal knowledge that bites people
+                ("Webhook handler silently drops events when signature header missing.")
 
-Relationship verbs (use exactly these):
-  owns | uses | requires | governs | manages | integrates-with | reports-to | defines | depends-on | replaces
+==================================================================================
+DEPARTMENT TAGGING — every unit must carry exactly one department
+==================================================================================
+Pick the department most likely to *consume* this knowledge. Allowed values:
+  engineering – code, infra, deploys, services, on-call
+  product     – roadmap, features, user research, prioritization
+  legal       – contracts, compliance, IP, NDAs, regulatory matters
+  finance     – budgets, billing, revenue, accounting, payments policy
+  hr          – hiring, onboarding, comp, performance, PTO, org chart
+  sales       – pipeline, accounts, quotas, GTM motion
+  marketing   – brand, campaigns, content, comms
+  operations  – inventory, supply chain, logistics, vendor management, office
+  security    – access control, secrets, vulnerabilities, audits, incident response
+  general     – cross-cutting; pick this only when no single department fits
 
-Quality rules:
-- Each unit captures ONE thing only. Split compound statements.
-- Use full entity names, never pronouns.
-- evidence_quote must be a literal substring from the source text.
-- confidence: 1.0=clearly stated, 0.7=strongly implied, 0.4=speculative. Omit below 0.4.
-- Relationships must connect two entities that both appear in the entities list.
-- Skip pleasantries, scheduling, off-topic chatter.
+==================================================================================
+RELATIONSHIP VERBS — use exactly these
+==================================================================================
+  owns | uses | requires | governs | manages | integrates-with | reports-to |
+  defines | depends-on | replaces
 
-Return ONLY valid JSON — no markdown, no explanation:
+==================================================================================
+QUALITY RULES — non-negotiable
+==================================================================================
+A. ATOMIC. Each unit captures ONE claim. Split compound statements:
+   BAD:  "Alice owns billing and Bob owns auth."
+   GOOD: 1. "Alice Chen owns billing-svc."
+         2. "Bob Martinez owns auth-svc."
+
+B. SELF-CONTAINED. The statement must include the subject explicitly. No pronouns.
+   BAD:  "owns billing"           (subject missing)
+   BAD:  "She owns billing"        (pronoun)
+   GOOD: "Alice Chen owns billing-svc."
+
+C. EVIDENCE-BACKED. evidence_quote must be a LITERAL substring from the source text
+   (copy-paste, no paraphrasing). If you can't find a literal substring, drop the unit.
+
+D. CONFIDENCE ANCHORS:
+   1.0  – Source states it directly and unambiguously.
+   0.85 – Stated with one minor hedge ("seems", "I think").
+   0.7  – Strongly implied, single source.
+   0.5  – Inferred across multiple sentences.
+   0.4  – Speculative. Omit anything below.
+
+E. RELATIONSHIP RULES:
+   - Both `from` and `to` must be entity names you also emit in `entities`.
+   - Only emit a relationship if the verb is supported by the text.
+   - For ownership transfers ("Bob took over from Alice"), emit:
+       (Bob, owns, billing-svc)   — the new state
+     and let the brain reconcile against any prior "Alice owns billing-svc".
+
+F. SKIP NON-DURABLE NOISE: greetings, scheduling, "lgtm", "+1", chitchat, jokes.
+
+G. TEMPORAL CUES: when the text says "as of", "took over", "previously", "no longer",
+   "migrated from X to Y" — emit ONLY the current-state unit. The brain handles the
+   supersession of the older fact.
+
+==================================================================================
+OUTPUT FORMAT — JSON only, no markdown fences, no preamble
+==================================================================================
 {
   "entities": [
     {"name": "string", "kind": "person|team|system|product|process|concept|tool|customer", "aliases": ["string"]}
@@ -197,17 +393,20 @@ Return ONLY valid JSON — no markdown, no explanation:
   "units": [
     {
       "kind": "fact|process|decision|ownership|definition|policy|gotcha",
+      "department": "engineering|product|legal|finance|hr|sales|marketing|operations|security|general",
       "subject": "string",
-      "statement": "string",
+      "statement": "string (full sentence, includes subject, no pronouns)",
       "entities": ["string"],
-      "evidence_quote": "string",
+      "evidence_quote": "literal substring from source",
       "confidence": 0.0
     }
   ],
   "relationships": [
     {"from": "entity_name", "relation": "verb", "to": "entity_name", "confidence": 0.0}
   ]
-}"""
+}
+
+If the source contains no durable knowledge, return all three arrays empty."""
 
 def _parse_extraction_json(raw: str) -> dict:
     """Robustly extract JSON from LLM output that may include markdown fences."""
@@ -284,16 +483,18 @@ def _merge_extractions(results: list[dict]) -> dict:
 class IngestionAgent:
     """Reads raw content (text or image) and extracts structured knowledge via the LLM."""
 
-    def _extract_chunk(self, source_type: str, title: str, chunk: str) -> dict:
+    def _extract_chunk(self, source_type: str, title: str, chunk: str, model_override: str | None = None) -> dict:
         prompt = (
             f"SOURCE TYPE: {source_type}\n"
             f"TITLE: {title}\n"
             f"---\n{chunk}\n---\n\n"
             "Extract entities, knowledge units, and relationships per the system instructions."
         )
+        client, model = _resolve_override("extraction", model_override)
+        t0 = time.time()
         try:
-            response = llm_client.chat.completions.create(
-                model=MODEL_NAME,
+            response = client.chat.completions.create(
+                model=model,
                 messages=[
                     {"role": "system", "content": EXTRACTION_SYSTEM},
                     {"role": "user", "content": prompt},
@@ -301,32 +502,43 @@ class IngestionAgent:
                 max_tokens=2048,
                 temperature=0.1,
             )
+            latency_ms = int((time.time() - t0) * 1000)
+            usage = getattr(response, "usage", None)
+            _log_call(
+                "extraction", model, latency_ms,
+                prompt_tokens=getattr(usage, "prompt_tokens", None),
+                completion_tokens=getattr(usage, "completion_tokens", None),
+                note=f"chunk len={len(chunk)}",
+            )
             return _parse_extraction_json(response.choices[0].message.content)
         except Exception as e:
+            _log_call("extraction", model, int((time.time() - t0) * 1000), ok=False, note=str(e)[:80])
             print(f"[IngestionAgent] Chunk extraction error: {e}")
             return {"entities": [], "units": [], "relationships": []}
 
-    def extract_from_text(self, source_type: str, title: str, content: str) -> dict:
+    def extract_from_text(self, source_type: str, title: str, content: str, model_override: str | None = None) -> dict:
         chunks = _chunk_text(content, max_chars=3500, overlap=300)
         if len(chunks) > 1:
             print(f"[IngestionAgent] Long content ({len(content)} chars) split into {len(chunks)} chunks")
-        results = [self._extract_chunk(source_type, title, chunk) for chunk in chunks]
+        results = [self._extract_chunk(source_type, title, chunk, model_override=model_override) for chunk in chunks]
         merged = _merge_extractions(results)
         print(f"[IngestionAgent] Extracted {len(merged['units'])} units, "
               f"{len(merged['entities'])} entities, "
               f"{len(merged['relationships'])} relationships from {len(chunks)} chunk(s)")
         return merged
 
-    def describe_image(self, image_data: bytes, mime_type: str = "image/png") -> str:
+    def describe_image(self, image_data: bytes, mime_type: str = "image/png", model_override: str | None = None) -> str:
         """
         VLM step: convert an image to a rich text description suitable for RAG.
         Requires a vision-capable model at VLM_API_BASE.
         """
         b64 = base64.b64encode(image_data).decode("utf-8")
         data_url = f"data:{mime_type};base64,{b64}"
+        client, model = _resolve_override("vlm", model_override)
+        t0 = time.time()
         try:
-            response = vlm_client.chat.completions.create(
-                model=VLM_MODEL_NAME,
+            response = client.chat.completions.create(
+                model=model,
                 messages=[{
                     "role": "user",
                     "content": [
@@ -334,19 +546,38 @@ class IngestionAgent:
                         {
                             "type": "text",
                             "text": (
-                                "You are extracting company knowledge from this image. "
-                                "Describe every piece of text, diagram, architecture, system, "
-                                "process, decision, person, or data visible. "
-                                "Be exhaustive and specific — your output feeds a knowledge base. "
-                                "Write plain prose, no bullet lists."
+                                "You are the vision module of a Company Brain. Your description "
+                                "feeds a downstream text extractor that will turn it into atomic "
+                                "knowledge units. Be specific, named, and grounded.\n\n"
+                                "Describe in plain prose (no lists, no markdown):\n"
+                                "1. Every readable text element, transcribed verbatim where possible.\n"
+                                "2. Every named system, service, person, team, or component shown.\n"
+                                "3. Every visual relationship — arrows, containment, data flows, "
+                                "deployment topology. Translate them into explicit sentences:\n"
+                                "   • A box containing B → 'A includes B'.\n"
+                                "   • Arrow from A to B labeled 'writes' → 'A writes to B'.\n"
+                                "   • Dotted line → 'A optionally calls B'.\n"
+                                "4. Any owner names, environments (prod/staging), regions, or versions.\n"
+                                "5. Anything resembling a process step, decision, or policy.\n\n"
+                                "Do NOT speculate beyond what is visible. Do NOT add a summary or "
+                                "introduction. Start with the most important entity in the image."
                             ),
                         },
                     ],
                 }],
                 max_tokens=1024,
             )
+            latency_ms = int((time.time() - t0) * 1000)
+            usage = getattr(response, "usage", None)
+            _log_call(
+                "vlm", model, latency_ms,
+                prompt_tokens=getattr(usage, "prompt_tokens", None),
+                completion_tokens=getattr(usage, "completion_tokens", None),
+                note=f"image {len(image_data)} bytes",
+            )
             return response.choices[0].message.content
         except Exception as e:
+            _log_call("vlm", model, int((time.time() - t0) * 1000), ok=False, note=str(e)[:80])
             return f"[VLM description unavailable — configure VLM_API_BASE and VLM_MODEL_NAME. Error: {e}]"
 
 
@@ -456,9 +687,11 @@ class StructuringAgent:
             f"Pick the single most relevant existing unit. Apply the decision rules.\n"
             f'Return JSON with target_id set to the id of the matching existing unit.'
         )
+        client, model = router.get("reconcile")
+        t0 = time.time()
         try:
-            resp = llm_client.chat.completions.create(
-                model=MODEL_NAME,
+            resp = client.chat.completions.create(
+                model=model,
                 messages=[
                     {"role": "system", "content": RECONCILE_SYSTEM},
                     {"role": "user", "content": prompt},
@@ -466,9 +699,17 @@ class StructuringAgent:
                 max_tokens=160,
                 temperature=0.0,
             )
+            latency_ms = int((time.time() - t0) * 1000)
+            usage = getattr(resp, "usage", None)
             result = _parse_extraction_json(resp.choices[0].message.content)
             verdict = result.get("verdict", "independent")
             target_id = result.get("target_id")
+            _log_call(
+                "reconcile", model, latency_ms,
+                prompt_tokens=getattr(usage, "prompt_tokens", None),
+                completion_tokens=getattr(usage, "completion_tokens", None),
+                note=f"verdict={verdict}",
+            )
             print(f"[Reconcile] verdict={verdict} target={target_id} reason={result.get('reason','')}")
 
             if verdict == "duplicate":
@@ -478,6 +719,7 @@ class StructuringAgent:
             if verdict == "conflicts" and target_id:
                 return {"superseded_ids": [], "duplicate": False, "conflicts_with": [target_id]}
         except Exception as e:
+            _log_call("reconcile", model, int((time.time() - t0) * 1000), ok=False, note=str(e)[:80])
             print(f"[Reconcile] LLM error: {e}")
 
         return {"superseded_ids": [], "duplicate": False, "conflicts_with": []}
@@ -504,12 +746,19 @@ class StructuringAgent:
                 return f"{subj} {stmt}"
             return stmt
 
+        VALID_DEPTS = {"engineering", "product", "legal", "finance", "hr",
+                       "sales", "marketing", "operations", "security", "general"}
+
         pending = []
         for u in units:
             uid = str(uuid.uuid4())[:10]
+            dept = (u.get("department") or "general").strip().lower()
+            if dept not in VALID_DEPTS:
+                dept = "general"
             pending.append((uid, {
                 "id": uid,
                 "kind": u.get("kind", "fact"),
+                "department": dept,
                 "subject": u.get("subject", ""),
                 "statement": _normalize_statement(u),  # always self-contained
                 "entities": u.get("entities", []),
@@ -539,6 +788,7 @@ class StructuringAgent:
                     "kind": unit["kind"],
                     "subject": unit["subject"],
                     "confidence": unit["confidence"],
+                    "department": unit.get("department", "general"),
                 } for _, unit in pending],
             )
 
@@ -662,7 +912,7 @@ class StructuringAgent:
 class ExecutionAgent:
     """Semantic retrieval from ChromaDB + grounded generation via the 70B model."""
 
-    def execute(self, query: str, n_results: int = 6) -> dict:
+    def execute(self, query: str, n_results: int = 6, model_override: str | None = None) -> dict:
         t0 = time.time()
 
         count = collection.count()
@@ -678,25 +928,53 @@ class ExecutionAgent:
             retrieved_metas = results["metadatas"][0]
 
         if retrieved_docs:
-            # Plain numbered list — easier for smaller models to parse than
-            # bracket-prefixed metadata lines which get echoed back verbatim.
+            # Pull disputed/stale flags from brain.json so the answer can flag conflicts.
+            brain = _read_brain()
+            unit_by_id = {u["id"]: u for u in brain.get("units", [])}
+
             context_lines = []
-            for i, (doc, m) in enumerate(zip(retrieved_docs, retrieved_metas), 1):
-                context_lines.append(f"{i}. {doc}")
+            disputed_facts = []
+            for i, (uid, doc, m) in enumerate(
+                zip(retrieved_ids, retrieved_docs, retrieved_metas), 1
+            ):
+                u = unit_by_id.get(uid, {})
+                tags = []
+                if u.get("disputed"):
+                    tags.append("DISPUTED")
+                    disputed_facts.append(i)
+                if u.get("stale") or u.get("supersededBy"):
+                    tags.append("SUPERSEDED")
+                tag_str = f" [{', '.join(tags)}]" if tags else ""
+                dept = m.get("department", "")
+                dept_str = f" ({dept})" if dept and dept != "general" else ""
+                context_lines.append(f"{i}.{tag_str}{dept_str} {doc}")
             context_section = "\n".join(context_lines)
 
+            disputed_note = ""
+            if disputed_facts:
+                disputed_note = (
+                    f"\nFacts {disputed_facts} are DISPUTED — multiple sources contradict. "
+                    f"If your answer relies on them, explicitly call out the conflict.\n"
+                )
+
             user_prompt = (
-                f"Here are facts from the company knowledge base:\n"
-                f"{context_section}\n\n"
+                f"Facts from the company knowledge base:\n"
+                f"{context_section}\n{disputed_note}\n"
                 f"Question: {query}\n"
-                f"Answer (use specific names from the facts above, do not say 'the company'):"
+                f"Answer:"
             )
             system_msg = (
-                "You are a company knowledge assistant. "
-                "Answer the question using ONLY the numbered facts provided. "
-                "Always name the specific person, team, or system. "
-                "If the facts do not answer the question, say exactly: "
-                "'The brain does not have this information yet.'"
+                "You are a company knowledge assistant. Rules:\n"
+                "1. Use ONLY the numbered facts above. Never invent names, services, or numbers.\n"
+                "2. Always name the specific person, team, or system. Never say 'the company' "
+                "or 'someone'.\n"
+                "3. Prefer fresh facts; ignore facts marked SUPERSEDED unless the user explicitly "
+                "asks about historical state.\n"
+                "4. If facts are marked DISPUTED, say so plainly: "
+                "\"The sources disagree — A says X, B says Y.\"\n"
+                "5. If the facts do not answer the question, reply exactly: "
+                "'The brain does not have this information yet.'\n"
+                "6. Be brief. One to three sentences unless the user asks for detail."
             )
         else:
             user_prompt = f"Question: {query}"
@@ -705,14 +983,24 @@ class ExecutionAgent:
                 "Tell the user the brain is empty and they should ingest sources first."
             )
 
-        response = llm_client.chat.completions.create(
-            model=MODEL_NAME,
+        client, model = _resolve_override("execute", model_override)
+        t1 = time.time()
+        response = client.chat.completions.create(
+            model=model,
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_prompt},
             ],
             max_tokens=512,
             temperature=0.1,
+        )
+        exec_latency_ms = int((time.time() - t1) * 1000)
+        usage = getattr(response, "usage", None)
+        _log_call(
+            "execute", model, exec_latency_ms,
+            prompt_tokens=getattr(usage, "prompt_tokens", None),
+            completion_tokens=getattr(usage, "completion_tokens", None),
+            note=f"q={query[:40]!r}",
         )
 
         answer = response.choices[0].message.content
@@ -729,7 +1017,7 @@ class ExecutionAgent:
 class FeedbackAgent:
     """Evaluates whether the answer is grounded in the retrieved context using the 70B model."""
 
-    def evaluate(self, query: str, answer: str, context_docs: list) -> dict:
+    def evaluate(self, query: str, answer: str, context_docs: list, model_override: str | None = None) -> dict:
         if not context_docs:
             return {
                 "confidence": 0.0,
@@ -739,25 +1027,47 @@ class FeedbackAgent:
 
         ctx = "\n".join(f"{i+1}. {d}" for i, d in enumerate(context_docs))
         prompt = (
-            f"Facts:\n{ctx}\n\n"
-            f"Question: {query}\n"
-            f"Answer: {answer}\n\n"
-            f"Is the answer supported by the facts? "
-            f"Reply with JSON only:\n"
-            f'{{ "confidence": 0.0-1.0, "grounded": true/false, "feedback": "one sentence" }}'
+            f"You are auditing whether an answer is grounded in retrieved facts.\n\n"
+            f"FACTS:\n{ctx}\n\n"
+            f"QUESTION: {query}\n"
+            f"ANSWER: {answer}\n\n"
+            f"Evaluate three things:\n"
+            f"  1. ENTITY COVERAGE — every person/team/system named in the answer must "
+            f"appear in the facts. If the answer names someone not in the facts → grounded=false.\n"
+            f"  2. CLAIM SUPPORT — every claim in the answer must be derivable from the facts.\n"
+            f"  3. SCOPE — the answer must address the question, not adjacent topics.\n\n"
+            f"confidence guide:\n"
+            f"  1.0 = every claim directly stated in facts.\n"
+            f"  0.8 = answer is correct but minor inference not in facts.\n"
+            f"  0.5 = partial support; some claim is unverifiable.\n"
+            f"  0.2 = answer fabricates a name, number, or fact.\n"
+            f"  0.0 = answer contradicts the facts or is unrelated.\n\n"
+            f"Reply with JSON only (no markdown, no prose):\n"
+            f'{{ "confidence": 0.0-1.0, "grounded": true/false, "feedback": "one sentence citing fact #s if relevant" }}'
         )
+        client, model = _resolve_override("feedback", model_override)
+        t0 = time.time()
         try:
-            response = llm_client.chat.completions.create(
-                model=MODEL_NAME,
+            response = client.chat.completions.create(
+                model=model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=120,
+                max_tokens=160,
                 temperature=0.0,
             )
+            latency_ms = int((time.time() - t0) * 1000)
+            usage = getattr(response, "usage", None)
             raw = response.choices[0].message.content.strip()
             parsed = _parse_extraction_json(raw)
+            _log_call(
+                "feedback", model, latency_ms,
+                prompt_tokens=getattr(usage, "prompt_tokens", None),
+                completion_tokens=getattr(usage, "completion_tokens", None),
+                note=f"grounded={parsed.get('grounded', '?')}",
+            )
             if "confidence" in parsed:
                 return parsed
         except Exception as e:
+            _log_call("feedback", model, int((time.time() - t0) * 1000), ok=False, note=str(e)[:80])
             print(f"[FeedbackAgent] Error: {e}")
 
         return {"confidence": 0.8, "grounded": True, "feedback": "Evaluation unavailable."}
@@ -776,17 +1086,43 @@ feedback_agent = FeedbackAgent()
 
 class QueryRequest(BaseModel):
     query: str
+    model: Optional[str] = None  # per-request override; falls back to routed default
 
 class IngestRequest(BaseModel):
     kind: str
     title: str
     content: str
     url: Optional[str] = None
+    model: Optional[str] = None  # per-request override for the extraction call
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Routes
 # ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/models")
+def list_models():
+    """
+    Models available for per-request override on /ingest and /ask.
+    Each entry tells the UI which endpoint serves the model so it can show a hint.
+    """
+    out = []
+    for name, client in _MODEL_INDEX.items():
+        out.append({
+            "id": name,
+            "endpoint": str(client.base_url),
+            "is_text_default": name == MODEL_NAME,
+            "is_vlm_default": name == VLM_MODEL_NAME,
+        })
+    out.sort(key=lambda m: (not m["is_text_default"], not m["is_vlm_default"], m["id"]))
+    return {
+        "models": out,
+        "defaults": {
+            "text": MODEL_NAME,
+            "vlm": VLM_MODEL_NAME,
+        },
+    }
+
 
 @app.get("/health")
 def health_check():
@@ -810,7 +1146,9 @@ def ingest_text(req: IngestRequest):
     source_id = str(uuid.uuid4())[:8]
     now = datetime.datetime.utcnow().isoformat() + "Z"
 
-    extraction = ingest_agent.extract_from_text(req.kind, req.title, req.content)
+    extraction = ingest_agent.extract_from_text(
+        req.kind, req.title, req.content, model_override=req.model,
+    )
 
     source = {
         "id": source_id,
@@ -864,6 +1202,7 @@ async def ingest_file(
     title: str = Form(...),
     kind: str = Form("doc"),
     url: Optional[str] = Form(None),
+    model: Optional[str] = Form(None),
     file: UploadFile = File(...),
 ):
     """
@@ -884,6 +1223,7 @@ async def ingest_file(
         source_type=kind,
         title=title,
         content=text,
+        model_override=model,
     )
 
     source = {
@@ -920,6 +1260,8 @@ async def ingest_image(
     title: str = Form(...),
     kind: str = Form("doc"),
     url: Optional[str] = Form(None),
+    model: Optional[str] = Form(None),  # used as VLM model override
+    text_model: Optional[str] = Form(None),  # used as extraction model override
     file: UploadFile = File(...),
 ):
     """
@@ -930,7 +1272,7 @@ async def ingest_image(
     mime = file.content_type or "image/png"
 
     # Step 1: VLM converts image to text
-    description = ingest_agent.describe_image(image_data, mime)
+    description = ingest_agent.describe_image(image_data, mime, model_override=model)
 
     source_id = str(uuid.uuid4())[:8]
     now = datetime.datetime.utcnow().isoformat() + "Z"
@@ -940,6 +1282,7 @@ async def ingest_image(
         source_type=f"image/{kind}",
         title=title,
         content=description,
+        model_override=text_model or model,
     )
 
     source = {
@@ -1031,11 +1374,12 @@ def ask_brainos(req: QueryRequest):
             "feedback": {"confidence": 1.0, "grounded": True, "feedback": "Blocked by policy."},
             "blocked_topic": blocked,
         }
-    exec_result = exec_agent.execute(req.query)
+    exec_result = exec_agent.execute(req.query, model_override=req.model)
     feedback = feedback_agent.evaluate(
         query=req.query,
         answer=exec_result["answer"],
         context_docs=exec_result["retrieved_docs"],
+        model_override=req.model,
     )
 
     return {
@@ -1152,6 +1496,11 @@ def get_metrics():
             "model": VLM_MODEL_NAME,
             "endpoint": vlm_url,
         },
+        # Per-task model routes (so the dashboard knows which model handles what)
+        "routes": router.describe(),
+        # Recent in-process LLM calls (last 80, newest last). Lets the dashboard
+        # show real text-generation traffic — not just vLLM aggregates.
+        "recent_calls": list(_call_log),
     }
 
 

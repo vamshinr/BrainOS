@@ -10,6 +10,7 @@ const Body = z.object({
   title: z.string().min(1),
   content: z.string().min(1),
   url: z.string().url().optional(),
+  model: z.string().optional(),
 });
 
 export async function POST(req: Request) {

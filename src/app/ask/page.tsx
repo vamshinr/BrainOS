@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState } from "react";
+import { ModelPicker } from "@/components/model-picker";
 
 const SUGGESTIONS = [
   "Who owns the billing service?",
@@ -26,6 +27,7 @@ export default function AskPage() {
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState<Answer[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [model, setModel] = useState("");
 
   async function ask(q: string) {
     setErr(null);
@@ -34,7 +36,7 @@ export default function AskPage() {
       const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q }),
+        body: JSON.stringify({ question: q, model: model || undefined }),
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
@@ -69,22 +71,33 @@ export default function AskPage() {
 
       <form
         onSubmit={(e) => { e.preventDefault(); if (question.trim()) ask(question.trim()); }}
-        className="mt-6 flex gap-2"
+        className="mt-6 space-y-3"
       >
-        <input
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          placeholder="Ask anything about how the company works…"
-          className="flex-1 rounded-md border bg-[var(--card)] px-3 py-2.5 text-sm"
-          disabled={loading}
-        />
-        <button
-          type="submit"
-          disabled={loading || !question.trim()}
-          className="rounded-md bg-[var(--foreground)] text-[var(--background)] px-4 py-2 text-sm font-medium disabled:opacity-50"
-        >
-          {loading ? "Retrieving…" : "Ask"}
-        </button>
+        <div className="flex gap-2">
+          <input
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            placeholder="Ask anything about how the company works…"
+            className="flex-1 rounded-md border bg-[var(--card)] px-3 py-2.5 text-sm"
+            disabled={loading}
+          />
+          <button
+            type="submit"
+            disabled={loading || !question.trim()}
+            className="rounded-md bg-[var(--foreground)] text-[var(--background)] px-4 py-2 text-sm font-medium disabled:opacity-50"
+          >
+            {loading ? "Retrieving…" : "Ask"}
+          </button>
+        </div>
+        <div className="max-w-md">
+          <ModelPicker
+            value={model}
+            onChange={setModel}
+            mode="text"
+            label="Answer model (optional override)"
+            hint="affects execute + feedback"
+          />
+        </div>
       </form>
 
       <div className="mt-3 flex flex-wrap gap-2">

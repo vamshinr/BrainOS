@@ -2,6 +2,7 @@
 
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { ModelPicker } from "@/components/model-picker";
 
 const KINDS = [
   { value: "slack", label: "Slack" },
@@ -58,6 +59,11 @@ export default function IngestPage() {
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<Result | null>(null);
 
+  // Optional per-request model overrides. Empty string = "Auto".
+  const [textModel, setTextModel] = useState("");        // text + file extraction
+  const [vlmModel, setVlmModel] = useState("");          // image → description
+  const [imgTextModel, setImgTextModel] = useState("");  // post-VLM extraction
+
   function onImgChange(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0] ?? null;
     setImgFile(f);
@@ -82,6 +88,7 @@ export default function IngestPage() {
       fd.append("title", fileTitle);
       fd.append("kind", fileKind);
       if (fileUrl) fd.append("url", fileUrl);
+      if (textModel) fd.append("model", textModel);
 
       const res = await fetch("/api/ingest-file", { method: "POST", body: fd });
       const j = await res.json();
@@ -108,7 +115,11 @@ export default function IngestPage() {
       const res = await fetch("/api/ingest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, title, content, url: url || undefined }),
+        body: JSON.stringify({
+          kind, title, content,
+          url: url || undefined,
+          model: textModel || undefined,
+        }),
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
@@ -136,6 +147,8 @@ export default function IngestPage() {
       fd.append("title", imgTitle);
       fd.append("kind", imgKind);
       if (imgUrl) fd.append("url", imgUrl);
+      if (vlmModel) fd.append("model", vlmModel);
+      if (imgTextModel) fd.append("text_model", imgTextModel);
 
       const res = await fetch("/api/ingest-image", { method: "POST", body: fd });
       const j = await res.json();
@@ -235,6 +248,14 @@ export default function IngestPage() {
             />
           </Field>
 
+          <ModelPicker
+            value={textModel}
+            onChange={setTextModel}
+            mode="text"
+            label="Extraction model (optional)"
+            hint="overrides extraction agent"
+          />
+
           <SubmitRow loading={loading} disabled={!title || !content} label="Extract knowledge" />
         </form>
       )}
@@ -295,6 +316,14 @@ export default function IngestPage() {
               {uploadFile.name} · {(uploadFile.size / 1024).toFixed(1)} KB
             </div>
           )}
+
+          <ModelPicker
+            value={textModel}
+            onChange={setTextModel}
+            mode="text"
+            label="Extraction model (optional)"
+            hint="overrides extraction agent"
+          />
 
           <SubmitRow loading={loading} disabled={!fileTitle || !uploadFile} label="Extract knowledge" />
         </form>
@@ -362,6 +391,23 @@ export default function IngestPage() {
               />
             </div>
           )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <ModelPicker
+              value={vlmModel}
+              onChange={setVlmModel}
+              mode="vlm"
+              label="Vision model (optional)"
+              hint="image → description"
+            />
+            <ModelPicker
+              value={imgTextModel}
+              onChange={setImgTextModel}
+              mode="text"
+              label="Extraction model (optional)"
+              hint="description → units"
+            />
+          </div>
 
           <SubmitRow loading={loading} disabled={!imgTitle || !imgFile} label="Ingest via VLM" />
         </form>

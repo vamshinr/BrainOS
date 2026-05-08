@@ -19,6 +19,8 @@ export async function POST(req: Request) {
     const title = formData.get("title") as string | null;
     const kind = (formData.get("kind") as string | null) ?? "doc";
     const url = formData.get("url") as string | null;
+    const model = formData.get("model") as string | null;
+    const textModel = formData.get("text_model") as string | null;
 
     if (!file || !title) {
       return NextResponse.json({ error: "file and title are required" }, { status: 400 });
@@ -28,6 +30,8 @@ export async function POST(req: Request) {
     backendFormData.append("title", title);
     backendFormData.append("kind", kind);
     if (url) backendFormData.append("url", url);
+    if (model) backendFormData.append("model", model);
+    if (textModel) backendFormData.append("text_model", textModel);
 
     const backendRes = await fetch("http://localhost:8081/api/ingest_image", {
       method: "POST",
