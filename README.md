@@ -1,7 +1,7 @@
 # Company Brain
 
 The biggest blocker to AI automation inside companies is no longer model
-quality — it's domain knowledge. Every company has critical know-how
+quality, it's domain knowledge. Every company has critical know-how
 scattered across people's heads, old email threads, Slack, and support
 tickets. AI agents can't operate like that.
 
@@ -10,6 +10,8 @@ fragmented source, structures it into atomic units, reconciles it as things
 change, and emits an executable skill file that AI agents load directly.
 
 Not search. Not chat-over-docs. A living map of how a company actually works.
+
+Copilots are great for helping you draft documents, analyze data in Excel, or summarize teams meeting, mostly working within the ecosystem and within the specific files.'Company Brain' would be more like a central nervous system for the whole company—constantly processing live data from everywhere, like Slack, emails, and other programs. This creates a real time understanding of everything happening, allowing automation to be more proactive and responsive across the business.
 
 ## What it does
 
@@ -74,4 +76,4 @@ src/app/
 ## Why this matters
 
 Every company in the world will need this layer. The AI tools exist. The
-company brain layer does not yet — until now.
+company brain layer does not yet until now.
