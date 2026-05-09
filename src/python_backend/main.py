@@ -296,7 +296,7 @@ _call_lock = threading.Lock()
 
 
 def _utc_now_iso() -> str:
-    return datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
+    return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _debug_value(value) -> str:
@@ -540,7 +540,7 @@ def _normalize_date(value: str | None) -> str | None:
 
 
 def _today_utc() -> datetime.date:
-    return datetime.datetime.now(datetime.UTC).date()
+    return datetime.datetime.now(datetime.timezone.utc).date()
 
 
 def _infer_temporal_status(unit: dict, source: dict | None = None) -> str:
@@ -1133,7 +1133,7 @@ class StructuringAgent:
         """
         total = collection.count()
         if total < 2:
-            return {"superseded_ids": [], "is_duplicate": False}
+            return {"superseded_ids": [], "duplicate": False, "conflicts_with": []}
 
         try:
             # Query without a where filter to avoid ChromaDB errors when no docs
@@ -1143,7 +1143,7 @@ class StructuringAgent:
                 n_results=min(6, total),
             )
         except Exception:
-            return {"superseded_ids": [], "is_duplicate": False}
+            return {"superseded_ids": [], "duplicate": False, "conflicts_with": []}
 
         ids = results["ids"][0] if results["ids"] else []
         distances = results["distances"][0] if results["distances"] else []
