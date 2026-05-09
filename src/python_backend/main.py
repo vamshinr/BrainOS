@@ -1,9 +1,6 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Optional
 import json
 import os
+os.environ.setdefault("TQDM_DISABLE", "1")  # suppress sentence-transformers progress bar
 import base64
 import uuid
 import time
@@ -13,7 +10,12 @@ import re
 import io
 import collections
 import uvicorn
-
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
+from rank_bm25 import BM25Okapi
+from pypdf import PdfReader
 from openai import OpenAI
 from dotenv import load_dotenv
 import chromadb
@@ -304,6 +306,40 @@ def _write_brain(state: dict):
         with open(BRAIN_JSON, "w") as f:
             json.dump(state, f, indent=2)
 
+# ── In-memory BM25 + entity indexes ───────────────────────────────────────────
+_bm25_index: object = None           # BM25Okapi instance (None until first ingest)
+_bm25_unit_ids: list[str] = []       # parallel to _bm25_corpus
+_bm25_corpus: list[str] = []         # raw unit statements
+_entity_index: dict[str, set[str]] = {}  # entity_name_lower → {unit_id, ...}
+
+def _build_indexes(brain: dict):
+    """Rebuild BM25 + entity indexes from brain state. Called on startup and after every ingest."""
+    global _bm25_index, _bm25_unit_ids, _bm25_corpus, _entity_index
+    active = [u for u in brain.get("units", []) if not u.get("stale") and not u.get("supersededBy")]
+    _bm25_unit_ids = [u["id"] for u in active]
+    _bm25_corpus   = [u["statement"] for u in active]
+    tokenized      = [stmt.lower().split() for stmt in _bm25_corpus]
+    _bm25_index    = BM25Okapi(tokenized) if tokenized else None
+    _entity_index  = {}
+    for u in active:
+        for ent in u.get("entities", []):
+            key = ent.lower().strip()
+            if key:
+                _entity_index.setdefault(key, set()).add(u["id"])
+
+def _rrf_fuse(ranked_lists: list[list[str]], k: int = 60) -> list[str]:
+    """Reciprocal Rank Fusion — combines ranked lists of unit IDs without weight tuning."""
+    scores: dict[str, float] = {}
+    for ranked in ranked_lists:
+        for rank, uid in enumerate(ranked):
+            scores[uid] = scores.get(uid, 0.0) + 1.0 / (k + rank + 1)
+    return sorted(scores, key=lambda x: scores[x], reverse=True)
+
+# Bootstrap indexes from persisted brain.json on startup
+_startup_brain = _read_brain()
+_build_indexes(_startup_brain)
+del _startup_brain
+
 # ── Extraction system prompt ───────────────────────────────────────────────────
 EXTRACTION_SYSTEM = """You are the extraction layer of a Company Brain — a system that
 turns scattered company knowledge into structured, atomic, executable data that AI agents
@@ -311,6 +347,26 @@ can load and act on.
 
 Extract exactly THREE things:
 1. ENTITIES — every named person, team, system, product, tool, customer, or concept.
+2. KNOWLEDGE UNITS — atomic self-contained statements. Each must be independently understandable.
+
+Unit kinds:
+  fact        – static info ("The billing API is on AWS us-east-1")
+  process     – how something is done ("Deploy by merging to main, then tagging v-prefix")
+  decision    – a choice made ("We chose Stripe over Adyen for v2")
+  ownership   – who owns something ("Alice owns the billing service")
+  definition  – what a term means ("P0 = customer-impacting outage")
+  policy      – a rule to follow ("All PRs need 2 reviewers")
+  gotcha      – non-obvious tribal knowledge ("Webhook handler silently drops if signature header missing")
+
+Quality rules:
+- Each unit captures ONE thing only. Split compound statements.
+- Use full entity names, never pronouns.
+- evidence_quote must be a literal substring from the source text.
+- confidence: 1.0=clearly stated, 0.7=strongly implied, 0.4=speculative. Omit below 0.4.
+- Skip pleasantries, scheduling, off-topic chatter.
+- sector: classify the business function. Engineering=technical/infra/APIs/deployments, Finance=money/payments/billing/pricing, HR=people/hiring/policies/benefits, Legal=compliance/contracts/privacy/regulation, Product=features/roadmap/releases/UX, Supply Chain=logistics/inventory/vendors, General=everything else.
+
+Return ONLY valid JSON — no markdown, no explanation:
 2. KNOWLEDGE UNITS — atomic, self-contained statements an agent could act on alone.
 3. RELATIONSHIPS — directed edges that form the company knowledge graph.
 
@@ -397,6 +453,9 @@ OUTPUT FORMAT — JSON only, no markdown fences, no preamble
       "subject": "string",
       "statement": "string (full sentence, includes subject, no pronouns)",
       "entities": ["string"],
+      "evidence_quote": "string",
+      "confidence": 0.0,
+      "sector": "HR|Legal|Finance|Engineering|Product|Supply Chain|General"
       "evidence_quote": "literal substring from source",
       "confidence": 0.0
     }
@@ -583,6 +642,17 @@ class IngestionAgent:
 
 RECONCILE_SYSTEM = """You reconcile a new knowledge unit against existing similar units from the company brain.
 
+Verdicts:
+  supersedes  – the new unit makes the existing one wrong or outdated (changed owner, updated policy, overriding decision, corrected fact). Mark the OLD unit as stale.
+  duplicate   – both say effectively the same thing. Discard the new unit.
+  independent – different enough to coexist. Keep both.
+
+Do NOT mark supersedes for:
+- Units about different entities even if the topic is similar (e.g. two different APIs deprecated at different times).
+- Units where the new one adds detail the old one lacks — they are independent, not replacements.
+- Units where timing is ambiguous (e.g. "we chose X" vs "we are evaluating X" — keep both).
+
+Be conservative: only mark supersedes/duplicate when very confident. When in doubt, return independent.
 Pick ONE of four verdicts:
 
   supersedes  – the NEW unit replaces the OLD one because it updates, corrects, or replaces it.
@@ -762,6 +832,7 @@ class StructuringAgent:
                 "subject": u.get("subject", ""),
                 "statement": _normalize_statement(u),  # always self-contained
                 "entities": u.get("entities", []),
+                "sector": u.get("sector", "General"),
                 "evidence": [{"sourceId": source_id, "quote": u.get("evidence_quote", "")}],
                 "confidence": float(u.get("confidence", 0.7)),
                 "createdAt": now,
@@ -788,6 +859,8 @@ class StructuringAgent:
                     "kind": unit["kind"],
                     "subject": unit["subject"],
                     "confidence": unit["confidence"],
+                    "entities": ",".join(unit.get("entities", [])),  # ChromaDB requires scalar
+                    "sector": unit.get("sector", "General"),
                     "department": unit.get("department", "general"),
                 } for _, unit in pending],
             )
@@ -892,6 +965,7 @@ class StructuringAgent:
             new_rels.append(edge)
 
         _write_brain(brain)
+        _build_indexes(brain)
 
         return {
             "units_stored": len(stored_units),
@@ -919,15 +993,65 @@ class ExecutionAgent:
         retrieved_ids, retrieved_docs, retrieved_metas = [], [], []
 
         if count > 0:
-            results = collection.query(
+            # ── Signal 1: Dense (ChromaDB cosine) ─────────────────────────────
+            dense_r = collection.query(
                 query_texts=[query],
-                n_results=min(n_results, count),
+                n_results=min(n_results * 2, count),
             )
-            retrieved_ids = results["ids"][0]
-            retrieved_docs = results["documents"][0]
-            retrieved_metas = results["metadatas"][0]
+            dense_ids   = dense_r["ids"][0]
+            dense_docs  = dense_r["documents"][0]
+            dense_metas = dense_r["metadatas"][0]
+
+            # ── Signal 2: BM25 sparse ─────────────────────────────────────────
+            bm25_ranked: list[str] = []
+            if _bm25_index and _bm25_unit_ids:
+                bm25_scores = _bm25_index.get_scores(query.lower().split())
+                bm25_ranked = [
+                    uid for uid, sc in sorted(
+                        zip(_bm25_unit_ids, bm25_scores), key=lambda x: x[1], reverse=True
+                    )[:n_results * 2] if sc > 0
+                ]
+
+            # ── Signal 3: Entity index ────────────────────────────────────────
+            entity_ranked: list[str] = []
+            if _entity_index:
+                q_tokens = set(query.lower().split())
+                hits: dict[str, int] = {}
+                for ent_key, uid_set in _entity_index.items():
+                    overlap = len(set(ent_key.split()) & q_tokens)
+                    if overlap:
+                        for uid in uid_set:
+                            hits[uid] = hits.get(uid, 0) + overlap
+                entity_ranked = sorted(hits, key=lambda x: hits[x], reverse=True)[:n_results * 2]
+
+            # ── RRF fusion ────────────────────────────────────────────────────
+            fused_ids = _rrf_fuse([dense_ids, bm25_ranked, entity_ranked])[:n_results]
+
+            # ── Resolve docs + metas for fused IDs ───────────────────────────
+            dense_lookup = {
+                uid: (doc, meta)
+                for uid, doc, meta in zip(dense_ids, dense_docs, dense_metas)
+            }
+            bm25_pos = {uid: i for i, uid in enumerate(_bm25_unit_ids)}
+
+            for uid in fused_ids:
+                if uid in dense_lookup:
+                    doc, meta = dense_lookup[uid]
+                elif uid in bm25_pos:
+                    doc  = _bm25_corpus[bm25_pos[uid]]
+                    meta = {"kind": "fact", "confidence": 0.7, "subject": "", "sector": "General"}
+                else:
+                    continue
+                retrieved_ids.append(uid)
+                retrieved_docs.append(doc)
+                retrieved_metas.append(meta)
 
         if retrieved_docs:
+            context_blocks = [
+                f"[{m.get('kind', 'fact')} | {m.get('subject', '')} | sector:{m.get('sector', 'General')} | conf:{m.get('confidence', 0.7):.2f}] {doc}"
+                for doc, m in zip(retrieved_docs, retrieved_metas)
+            ]
+            context_section = "\n".join(context_blocks)
             # Pull disputed/stale flags from brain.json so the answer can flag conflicts.
             brain = _read_brain()
             unit_by_id = {u["id"]: u for u in brain.get("units", [])}
@@ -988,6 +1112,20 @@ class ExecutionAgent:
         response = client.chat.completions.create(
             model=model,
             messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are the BrainOS execution agent running on an AMD MI300X GPU. "
+                        "Answer questions strictly based on company knowledge provided in context. "
+                        "Never invent facts.\n\n"
+                        "Format your response as:\n"
+                        "1. A direct answer in 1-3 sentences.\n"
+                        "2. A 'Sources:' bullet list citing each knowledge unit you used "
+                        "(e.g. '- [policy] All PRs need 2 reviewers').\n"
+                        "If the knowledge only partially covers the question, say explicitly "
+                        "what is and is not covered."
+                    ),
+                },
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_prompt},
             ],
@@ -1031,6 +1169,13 @@ class FeedbackAgent:
             f"FACTS:\n{ctx}\n\n"
             f"QUESTION: {query}\n"
             f"ANSWER: {answer}\n\n"
+            f"Evaluate whether the answer is grounded in the retrieved context.\n"
+            f"Check: (1) Are all claims in the answer supported by the context? "
+            f"(2) Does the answer cover ALL aspects of the question, or only some?\n"
+            f"If the answer is only partially grounded or misses part of the question, "
+            f"set grounded=false and explain what is missing in the feedback field.\n"
+            f"Respond ONLY with JSON (no markdown):\n"
+            f'{{ "confidence": 0.0-1.0, "grounded": true/false, "partial": true/false, "feedback": "one sentence" }}'
             f"Evaluate three things:\n"
             f"  1. ENTITY COVERAGE — every person/team/system named in the answer must "
             f"appear in the facts. If the answer names someone not in the facts → grounded=false.\n"
@@ -1177,15 +1322,19 @@ def ingest_text(req: IngestRequest):
     }
 
 
+_MAX_EXTRACTION_CHARS = 12_000  # ~3k tokens; keeps prompt well inside 70B context window
+
 def _extract_file_text(filename: str, data: bytes) -> str:
     """Extract plain text from PDF, TXT, MD, or CSV uploads."""
     name = filename.lower()
     if name.endswith(".pdf"):
         try:
-            from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(data))
             pages = [page.extract_text() or "" for page in reader.pages]
-            return "\n\n".join(p for p in pages if p.strip())
+            text = "\n\n".join(p for p in pages if p.strip())
+            if not text.strip():
+                return "[PDF has no selectable text — it may be a scanned/image-based PDF. Try the Image tab instead.]"
+            return text
         except Exception as e:
             return f"[PDF extraction failed: {e}]"
     # TXT / MD / CSV — decode directly
@@ -1195,6 +1344,16 @@ def _extract_file_text(filename: str, data: bytes) -> str:
         except UnicodeDecodeError:
             continue
     return data.decode("utf-8", errors="replace")
+
+
+def _chunk_text(text: str, chunk_size: int = _MAX_EXTRACTION_CHARS) -> list[str]:
+    """Split text into chunks that fit inside the LLM context window."""
+    chunks = []
+    for i in range(0, len(text), chunk_size):
+        chunk = text[i:i + chunk_size].strip()
+        if chunk:
+            chunks.append(chunk)
+    return chunks or [text]
 
 
 @app.post("/api/ingest_file")
@@ -1213,12 +1372,25 @@ async def ingest_file(
     filename = file.filename or "upload"
     text = _extract_file_text(filename, data)
 
-    if not text.strip():
-        raise HTTPException(status_code=422, detail="Could not extract any text from the file.")
+    if not text.strip() or text.startswith("[PDF has no selectable") or text.startswith("[PDF extraction failed"):
+        raise HTTPException(status_code=422, detail=text if text.startswith("[") else "Could not extract any text from the file.")
 
     source_id = str(uuid.uuid4())[:8]
     now = datetime.datetime.utcnow().isoformat() + "Z"
 
+    # Chunk large documents so each LLM call fits inside the context window,
+    # then merge all extracted units + entities across chunks.
+    chunks = _chunk_text(text)
+    all_units: list[dict] = []
+    all_entities: list[dict] = []
+    for chunk in chunks:
+        extraction = ingest_agent.extract_from_text(
+            source_type=kind,
+            title=title,
+            content=chunk,
+        )
+        all_units.extend(extraction.get("units", []))
+        all_entities.extend(extraction.get("entities", []))
     extraction = ingest_agent.extract_from_text(
         source_type=kind,
         title=title,
@@ -1230,24 +1402,31 @@ async def ingest_file(
         "id": source_id,
         "kind": kind,
         "title": title,
-        "content": text,
+        "content": text[:2000],  # store a preview, not the full text
         "url": url,
         "capturedAt": now,
         "uploadedFilename": filename,
+        "charCount": len(text),
+        "chunkCount": len(chunks),
     }
 
     result = struct_agent.embed_and_store(
         source_id=source_id,
         source=source,
+        units=all_units,
+        entities=all_entities,
         units=extraction.get("units", []),
         entities=extraction.get("entities", []),
         relationships=extraction.get("relationships", []),
     )
 
     return {
-        "message": f"File '{filename}' ingested.",
+        "message": f"File '{filename}' ingested ({len(chunks)} chunk(s)).",
         "chars_extracted": len(text),
+        "chunks_processed": len(chunks),
         "source_id": source_id,
+        "units_extracted": len(all_units),
+        "entities_extracted": len(all_entities),
         "units_extracted": len(extraction.get("units", [])),
         "entities_extracted": len(extraction.get("entities", [])),
         "relationships_extracted": len(extraction.get("relationships", [])),
@@ -1360,6 +1539,19 @@ def ingest_mock():
 
 @app.post("/api/ask")
 def ask_brainos(req: QueryRequest):
+    try:
+        exec_result = exec_agent.execute(req.query)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"LLM unavailable: {e}")
+
+    try:
+        feedback = feedback_agent.evaluate(
+            query=req.query,
+            answer=exec_result["answer"],
+            context_docs=exec_result["retrieved_docs"],
+        )
+    except Exception:
+        feedback = {"confidence": 0.0, "grounded": False, "feedback": "Evaluation unavailable."}
     blocked = _is_sensitive(req.query)
     if blocked:
         return {
@@ -1633,6 +1825,32 @@ def analyze_gaps():
             "total": len(gaps),
         },
     }
+
+
+@app.get("/api/state")
+def get_state():
+    """Return full brain state (sources, entities, units) for the Next.js frontend."""
+    return _read_brain()
+
+
+@app.delete("/api/units/{unit_id}")
+def delete_unit(unit_id: str):
+    """Mark a single unit as stale (soft delete) and remove it from ChromaDB."""
+    brain = _read_brain()
+    found = False
+    for u in brain["units"]:
+        if u["id"] == unit_id:
+            u["stale"] = True
+            found = True
+            break
+    if not found:
+        raise HTTPException(status_code=404, detail=f"Unit {unit_id} not found")
+    _write_brain(brain)
+    try:
+        collection.delete(ids=[unit_id])
+    except Exception:
+        pass
+    return {"ok": True, "deleted": unit_id}
 
 
 @app.delete("/api/clear")
