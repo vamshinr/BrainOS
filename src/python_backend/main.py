@@ -1446,6 +1446,80 @@ class StructuringAgent:
 class ExecutionAgent:
     """Hybrid retrieval over ChromaDB, BM25, raw chunks, and brain.json graph state."""
 
+    def revise_answer(
+        self,
+        query: str,
+        draft_answer: str,
+        context_docs: list,
+        verification: dict,
+        model_override: str | None = None,
+    ) -> str:
+        """Rewrite an answer after verifier finds unsupported or weakly grounded claims."""
+        if not context_docs:
+            return "The brain does not have this information yet."
+
+        ctx = "\n".join(f"{i+1}. {d}" for i, d in enumerate(context_docs))
+        unsupported = verification.get("unsupported_claims") or []
+        contradictions = verification.get("contradictions") or []
+        missing = verification.get("missing_aspects") or []
+        prompt = (
+            "Rewrite the draft answer so it is strictly supported by the retrieved context.\n\n"
+            "Rules:\n"
+            "1. Remove every unsupported or contradicted claim.\n"
+            "2. Do not add any new names, causes, timelines, tools, services, or process details.\n"
+            "3. For WHY/root-cause questions, separate directly stated causes from unknowns. "
+            "Use 'The retrieved evidence states...' or 'The retrieved evidence does not explicitly state...' when needed.\n"
+            "4. Cite every concrete claim with context item IDs like [1] or [2].\n"
+            "5. If only raw chunks support the answer, say 'Based on source excerpt context...'.\n"
+            "6. If the context is insufficient, answer exactly: 'The brain does not have this information yet.'\n"
+            "7. Keep the final answer concise.\n\n"
+            f"QUESTION:\n{query}\n\n"
+            f"RETRIEVED CONTEXT:\n{ctx}\n\n"
+            f"DRAFT ANSWER:\n{draft_answer}\n\n"
+            f"UNSUPPORTED CLAIMS TO REMOVE:\n{json.dumps(unsupported)}\n\n"
+            f"CONTRADICTIONS TO AVOID:\n{json.dumps(contradictions)}\n\n"
+            f"MISSING ASPECTS TO ACKNOWLEDGE IF RELEVANT:\n{json.dumps(missing)}\n\n"
+            "Return only the revised final answer. No JSON."
+        )
+        client, model = _resolve_override("execute", model_override)
+        t0 = time.time()
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an evidence-constrained answer rewriter. "
+                            "Your only job is to remove unsupported content and produce a concise, cited answer."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=420,
+                temperature=0.0,
+            )
+            latency_ms = int((time.time() - t0) * 1000)
+            usage = getattr(response, "usage", None)
+            _log_call(
+                "execute", model, latency_ms,
+                prompt_tokens=getattr(usage, "prompt_tokens", None),
+                completion_tokens=getattr(usage, "completion_tokens", None),
+                note="answer_revision",
+            )
+            revised = response.choices[0].message.content.strip()
+            _debug_event(
+                "answer.revise.done",
+                "Verifier-triggered answer revision complete",
+                unsupported=len(unsupported),
+                contradictions=len(contradictions),
+                missing=len(missing),
+            )
+            return revised or "The brain does not have this information yet."
+        except Exception as e:
+            _debug_event("answer.revise.error", "Answer revision failed", error=e)
+            return draft_answer
+
     def execute(self, query: str, n_results: int = 6, model_override: str | None = None) -> dict:
         t0 = time.time()
 
@@ -1771,14 +1845,17 @@ class ExecutionAgent:
                 "1. Use ONLY the Facts, Graph relationships, and Raw source excerpts above. Never invent names, services, or numbers.\n"
                 "2. Facts are the primary source. Raw source excerpts are fallback evidence when extracted facts are missing or incomplete.\n"
                 "3. If you rely on a raw source excerpt because no fact covers the answer, say the answer is based on source excerpt context.\n"
-                "4. Always name the specific person, team, or system. Never say 'the company' or 'someone'.\n"
-                "5. Prefer fresh facts; ignore facts marked SUPERSEDED unless the user explicitly asks about historical state.\n"
-                "6. For time-sensitive questions, use status/effective/valid_from/valid_to metadata. "
+                "4. Cite every concrete claim inline with the evidence ID that supports it, using F1, R1, or C1 labels.\n"
+                "5. Do not turn implications into facts. If a causal link is not explicitly stated, say the retrieved evidence does not explicitly state it.\n"
+                "6. For WHY/root-cause/incident questions, only name causes that the context directly states as causes. Do not add deployment, infra, or process assumptions.\n"
+                "7. Always name the specific person, team, or system only when the context names them. Never say 'the company' or 'someone'.\n"
+                "8. Prefer fresh facts; ignore facts marked SUPERSEDED unless the user explicitly asks about historical state.\n"
+                "9. For time-sensitive questions, use status/effective/valid_from/valid_to metadata. "
                 "For 'now/current' questions, prefer current or unknown facts over future/historical facts. "
                 "For future or historical questions, use the facts matching that date.\n"
-                "7. If facts are marked DISPUTED, say so plainly: \"The sources disagree — A says X, B says Y.\"\n"
-                "8. If the retrieved context does not answer the question, reply exactly: 'The brain does not have this information yet.'\n"
-                "9. Be brief. One to three sentences unless the user asks for detail."
+                "10. If facts are marked DISPUTED, say so plainly: \"The sources disagree — A says X, B says Y.\"\n"
+                "11. If the retrieved context does not answer the question, reply exactly: 'The brain does not have this information yet.'\n"
+                "12. Be brief. One to three sentences unless the user asks for detail."
             )
         else:
             user_prompt = f"Question: {query}"
@@ -1797,11 +1874,10 @@ class ExecutionAgent:
                     "content": (
                         "You are the BrainOS execution agent running on an AMD MI300X GPU. "
                         "Answer questions strictly based on company knowledge provided in context. "
-                        "Never invent facts.\n\n"
+                        "Never invent facts. Never add software-engineering explanations that are not explicitly supported.\n\n"
                         "Format your response as:\n"
-                        "1. A direct answer in 1-3 sentences.\n"
-                        "2. A 'Sources:' bullet list citing each knowledge unit you used "
-                        "(e.g. '- [policy] All PRs need 2 reviewers').\n"
+                        "1. A direct answer in 1-3 sentences with inline citations like [F1], [C2], or [R1].\n"
+                        "2. A 'Sources:' bullet list citing each evidence item you used.\n"
                         "If the knowledge only partially covers the question, say explicitly "
                         "what is and is not covered."
                     ),
@@ -1839,6 +1915,14 @@ class ExecutionAgent:
             "latency_ms": latency_ms,
             "retrieval_mode": "hybrid_bm25_vector_graph",
             "retrieval_debug": debug,
+            "verification_context": (
+                retrieved_docs
+                + [f"[graph] {rel}" for rel in relationship_context]
+                + [
+                    f"[raw chunk:{chunk.get('id')}] {chunk.get('text', '')[:1000]}"
+                    for chunk in retrieved_chunks
+                ]
+            ),
         }
 
 
@@ -2519,19 +2603,68 @@ def ask_brainos(req: QueryRequest):
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"LLM unavailable: {e}")
 
+    verification_context = exec_result.get("verification_context") or exec_result["retrieved_docs"]
+    answer_revised = False
+    draft_answer = exec_result["answer"]
     try:
         feedback = feedback_agent.evaluate(
             query=req.query,
-            answer=exec_result["answer"],
-            context_docs=exec_result["retrieved_docs"],
+            answer=draft_answer,
+            context_docs=verification_context,
             model_override=req.model,
         )
     except Exception:
         feedback = {"confidence": 0.0, "grounded": False, "feedback": "Evaluation unavailable."}
 
+    try:
+        confidence = float(feedback.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    unsupported = feedback.get("unsupported_claims") or []
+    contradictions = feedback.get("contradictions") or []
+    needs_revision = (
+        feedback.get("grounded") is False
+        or confidence < 0.72
+        or bool(unsupported)
+        or bool(contradictions)
+    )
+
+    if needs_revision and verification_context:
+        _debug_event(
+            "answer.revise.start",
+            "Verifier requested evidence-constrained answer revision",
+            confidence=confidence,
+            grounded=feedback.get("grounded"),
+            unsupported=len(unsupported),
+            contradictions=len(contradictions),
+        )
+        revised_answer = exec_agent.revise_answer(
+            query=req.query,
+            draft_answer=draft_answer,
+            context_docs=verification_context,
+            verification=feedback,
+            model_override=req.model,
+        )
+        if revised_answer and revised_answer != draft_answer:
+            exec_result["answer"] = revised_answer
+            answer_revised = True
+            try:
+                revised_feedback = feedback_agent.evaluate(
+                    query=req.query,
+                    answer=revised_answer,
+                    context_docs=verification_context,
+                    model_override=req.model,
+                )
+                revised_feedback["pre_revision_feedback"] = feedback
+                feedback = revised_feedback
+            except Exception:
+                feedback["revision_note"] = "Answer was revised, but second-pass evaluation failed."
+
     return {
         "query": req.query,
         "answer": exec_result["answer"],
+        "draft_answer": draft_answer if answer_revised else None,
+        "answer_revised": answer_revised,
         "used": exec_result["retrieved_ids"],
         "retrieved_texts": exec_result["retrieved_docs"],  # actual sentences sent to the model
         "latency_ms": exec_result["latency_ms"],

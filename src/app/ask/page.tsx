@@ -12,7 +12,17 @@ const SUGGESTIONS = [
   "When is the Adyen sunset?",
 ];
 
-type Feedback = { confidence: number; grounded: boolean; feedback: string };
+type Feedback = {
+  confidence: number;
+  grounded: boolean;
+  partial?: boolean;
+  raw_chunk_only?: boolean;
+  supporting_context_ids?: string[];
+  unsupported_claims?: string[];
+  missing_aspects?: string[];
+  contradictions?: string[];
+  feedback: string;
+};
 type RetrievalHit = { id: string; score?: number | null };
 type RetrievalDebug = {
   retrieval_mode?: string;
@@ -29,6 +39,8 @@ type RetrievalDebug = {
 type Answer = {
   question: string;
   answer: string;
+  draft_answer?: string | null;
+  answer_revised?: boolean;
   used: string[];
   retrieved_texts: string[];
   latency_ms: number | null;
@@ -71,6 +83,8 @@ export default function AskPage() {
         {
           question: q,
           answer: j.answer,
+          draft_answer: j.draft_answer ?? null,
+          answer_revised: j.answer_revised ?? false,
           used: j.used ?? [],
           retrieved_texts: j.retrieved_texts ?? [],
           latency_ms: j.latency_ms ?? null,
@@ -190,12 +204,49 @@ export default function AskPage() {
                   conf {h.feedback.confidence.toFixed(2)}
                 </span>
               )}
+              {h.answer_revised && (
+                <span className="rounded bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300 px-2 py-0.5">
+                  revised by verifier
+                </span>
+              )}
             </div>
 
             {h.feedback?.feedback && (
               <div className="mt-2 text-[11px] text-[var(--muted-foreground)] italic">
                 {h.feedback.feedback}
               </div>
+            )}
+
+            {h.feedback && (
+              <details className="mt-3">
+                <summary className="text-[11px] text-[var(--muted-foreground)] cursor-pointer hover:text-[var(--foreground)] select-none">
+                  Grounding verification
+                </summary>
+                <div className="mt-2 space-y-1 text-[11px] text-[var(--muted-foreground)]">
+                  <div>supporting context: {(h.feedback.supporting_context_ids ?? []).join(", ") || "none reported"}</div>
+                  <div>partial: {String(h.feedback.partial ?? false)} · raw chunk only: {String(h.feedback.raw_chunk_only ?? false)}</div>
+                  {(h.feedback.unsupported_claims ?? []).length > 0 && (
+                    <div>unsupported: {h.feedback.unsupported_claims!.join(" | ")}</div>
+                  )}
+                  {(h.feedback.missing_aspects ?? []).length > 0 && (
+                    <div>missing: {h.feedback.missing_aspects!.join(" | ")}</div>
+                  )}
+                  {(h.feedback.contradictions ?? []).length > 0 && (
+                    <div>contradictions: {h.feedback.contradictions!.join(" | ")}</div>
+                  )}
+                </div>
+              </details>
+            )}
+
+            {h.answer_revised && h.draft_answer && (
+              <details className="mt-3">
+                <summary className="text-[11px] text-[var(--muted-foreground)] cursor-pointer hover:text-[var(--foreground)] select-none">
+                  Original draft before verifier revision
+                </summary>
+                <div className="mt-2 text-[11px] text-[var(--muted-foreground)] whitespace-pre-wrap">
+                  {h.draft_answer}
+                </div>
+              </details>
             )}
 
             {/* Retrieved context — shows exactly what the model was given */}

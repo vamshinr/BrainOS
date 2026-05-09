@@ -33,6 +33,8 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       answer: data.answer,
+      draft_answer: data.draft_answer ?? null,
+      answer_revised: data.answer_revised ?? false,
       used: data.used ?? [],
       retrieved_texts: data.retrieved_texts ?? [],
       latency_ms: data.latency_ms ?? null,
