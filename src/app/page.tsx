@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { readState } from "@/lib/store";
-import { formatDate } from "@/lib/utils";
+import { readState } from "./store";
+import { formatDate } from "./utils";
 import { SeedButton } from "@/components/seed-button";
 import { ResetButton } from "@/components/reset-button";
 import { GapAnalysisButton } from "@/components/gap-analysis-button";
