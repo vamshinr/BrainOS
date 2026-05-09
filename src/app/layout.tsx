@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
+import { ThemeToggle } from "@/components/theme-toggle";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -31,11 +32,29 @@ const NAV: { href: string; label: string; hint: string }[] = [
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  const themeScript = `
+    (() => {
+      try {
+        const stored = localStorage.getItem("brain-os-theme");
+        const theme = stored === "light" || stored === "dark"
+          ? stored
+          : (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.classList.toggle("dark", theme === "dark");
+        document.documentElement.classList.toggle("light", theme === "light");
+        document.documentElement.style.colorScheme = theme;
+      } catch {}
+    })();
+  `;
+
   return (
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body className="min-h-full">
         <div className="grid min-h-screen grid-cols-[240px_1fr]">
           <aside className="border-r border-[var(--border)] bg-[var(--muted)]/40 px-5 py-6 sticky top-0 h-screen">
@@ -68,9 +87,12 @@ export default function RootLayout({
               ))}
             </nav>
 
-            <div className="absolute bottom-6 left-5 right-5 text-[11px] text-[var(--muted-foreground)] leading-relaxed">
-              Pull knowledge from every fragmented source. Structure it. Keep it
-              current. Ship it as a skill file.
+            <div className="absolute bottom-6 left-5 right-5 space-y-4">
+              <ThemeToggle />
+              <p className="text-[11px] text-[var(--muted-foreground)] leading-relaxed">
+                Pull knowledge from every fragmented source. Structure it. Keep it
+                current. Ship it as a skill file.
+              </p>
             </div>
           </aside>
 
