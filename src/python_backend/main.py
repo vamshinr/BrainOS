@@ -14,6 +14,8 @@ import tempfile
 import subprocess
 import shutil
 import xml.etree.ElementTree as ET
+from types import SimpleNamespace
+import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +23,6 @@ from pydantic import BaseModel
 from typing import Optional
 from rank_bm25 import BM25Okapi
 from pypdf import PdfReader
-from openai import OpenAI
 from dotenv import load_dotenv
 import chromadb
 from chromadb.config import Settings
@@ -41,15 +42,76 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── LLM clients (OpenAI-compatible, pointed at AMD MI300X via vLLM) ────────────
+# ── vLLM HTTP client ───────────────────────────────────────────────────────────
+# Talks directly to the vLLM server's HTTP API on the AMD MI300X via httpx.
+def _to_obj(data):
+    """Recursively convert JSON dicts to SimpleNamespace so callers can use
+    attribute access (response.choices[0].message.content, etc.)."""
+    if isinstance(data, dict):
+        return SimpleNamespace(**{k: _to_obj(v) for k, v in data.items()})
+    if isinstance(data, list):
+        return [_to_obj(v) for v in data]
+    return data
+
+
+class _ChatCompletions:
+    def __init__(self, http: httpx.Client):
+        self._http = http
+
+    def create(self, *, model, messages, max_tokens=None, temperature=None, **kwargs):
+        payload = {"model": model, "messages": messages, **kwargs}
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
+        if temperature is not None:
+            payload["temperature"] = temperature
+        r = self._http.post("/chat/completions", json=payload)
+        r.raise_for_status()
+        return _to_obj(r.json())
+
+
+class _Chat:
+    def __init__(self, http: httpx.Client):
+        self.completions = _ChatCompletions(http)
+
+
+class _Embeddings:
+    def __init__(self, http: httpx.Client):
+        self._http = http
+
+    def create(self, *, model, input):
+        r = self._http.post("/embeddings", json={"model": model, "input": input})
+        r.raise_for_status()
+        return _to_obj(r.json())
+
+
+class _Models:
+    def __init__(self, http: httpx.Client):
+        self._http = http
+
+    def list(self):
+        r = self._http.get("/models")
+        r.raise_for_status()
+        return _to_obj(r.json())
+
+
+class VLLMClient:
+    def __init__(self, base_url: str, timeout: float = 600.0):
+        self.base_url = base_url.rstrip("/")
+        self._http = httpx.Client(base_url=self.base_url, timeout=timeout)
+        self.chat = _Chat(self._http)
+        self.embeddings = _Embeddings(self._http)
+        self.models = _Models(self._http)
+
+
+# ── LLM clients (vLLM HTTP, pointed at AMD MI300X) ─────────────────────────────
 vllm_url = os.getenv("VLLM_API_BASE", "http://134.199.204.211:8000/v1")
 vlm_url = os.getenv("VLM_API_BASE", vllm_url)
 
-llm_client = OpenAI(base_url=vllm_url, api_key=os.getenv("OPENAI_API_KEY", "not-required"))
-vlm_client = OpenAI(base_url=vlm_url, api_key=os.getenv("OPENAI_API_KEY", "not-required"))
+llm_client = VLLMClient(base_url=vllm_url)
+vlm_client = VLLMClient(base_url=vlm_url)
 
 
-def _resolve_model(client: OpenAI, env_name: str, env_value: str) -> str:
+def _resolve_model(client: VLLMClient, env_name: str, env_value: str) -> str:
     """
     Verify the configured model name exists on the vLLM endpoint.
     If not, auto-select the first available model and warn.
@@ -111,15 +173,15 @@ class ModelRouter:
     """Resolve (client, model) per task with per-task env overrides."""
 
     def __init__(self):
-        self._client_cache: dict[str, OpenAI] = {
+        self._client_cache: dict[str, VLLMClient] = {
             vllm_url: llm_client,
             vlm_url: vlm_client,
         }
-        self._routes: dict[str, tuple[OpenAI, str]] = {}
+        self._routes: dict[str, tuple[VLLMClient, str]] = {}
         for task in TASKS:
             self._routes[task] = self._resolve(task)
 
-    def _resolve(self, task: str) -> tuple[OpenAI, str]:
+    def _resolve(self, task: str) -> tuple[VLLMClient, str]:
         tu = task.upper()
         # VLM has historic env var names
         if task == "vlm":
@@ -127,13 +189,10 @@ class ModelRouter:
         api_base = os.getenv(f"{tu}_API_BASE", "").strip() or vllm_url
         model = os.getenv(f"{tu}_MODEL", "").strip() or MODEL_NAME
         if api_base not in self._client_cache:
-            self._client_cache[api_base] = OpenAI(
-                base_url=api_base,
-                api_key=os.getenv("OPENAI_API_KEY", "not-required"),
-            )
+            self._client_cache[api_base] = VLLMClient(base_url=api_base)
         return self._client_cache[api_base], model
 
-    def get(self, task: str) -> tuple[OpenAI, str]:
+    def get(self, task: str) -> tuple[VLLMClient, str]:
         return self._routes.get(task, (llm_client, MODEL_NAME))
 
     def describe(self) -> list[dict]:
@@ -161,13 +220,13 @@ for r in router.describe():
 # ── Model index — every model the user can select per-request ────────────────
 # Aggregates models served by every endpoint we know about (the default text
 # endpoint, the VLM endpoint, and any custom-route endpoints). Maps model id
-# → which OpenAI client serves it. Used by the per-request override path so
+# → which vLLM client serves it. Used by the per-request override path so
 # the dropdown on /ingest and /ask can show every reachable model.
-def _build_model_index() -> dict[str, OpenAI]:
-    index: dict[str, OpenAI] = {}
+def _build_model_index() -> dict[str, VLLMClient]:
+    index: dict[str, VLLMClient] = {}
     seen_endpoints: set[str] = set()
 
-    def _add(client: OpenAI):
+    def _add(client: VLLMClient):
         base = str(client.base_url).rstrip("/")
         if base in seen_endpoints:
             return
@@ -187,11 +246,11 @@ def _build_model_index() -> dict[str, OpenAI]:
     return index
 
 
-_MODEL_INDEX: dict[str, OpenAI] = _build_model_index()
+_MODEL_INDEX: dict[str, VLLMClient] = _build_model_index()
 print(f"[BrainOS] Available models for per-request override: {sorted(_MODEL_INDEX.keys())}")
 
 
-def _resolve_override(task: str, model_override: str | None) -> tuple[OpenAI, str]:
+def _resolve_override(task: str, model_override: str | None) -> tuple[VLLMClient, str]:
     """
     Returns (client, model). If `model_override` is set and known, use it (with
     its serving endpoint). Otherwise fall back to the routed default for the task.
@@ -205,7 +264,7 @@ def _resolve_override(task: str, model_override: str | None) -> tuple[OpenAI, st
     return router.get(task)
 
 
-def _resolve_text_override(task: str, model_override: str | None) -> tuple[OpenAI, str]:
+def _resolve_text_override(task: str, model_override: str | None) -> tuple[VLLMClient, str]:
     requested_client = _MODEL_INDEX.get(model_override) if model_override else None
     default_client, default_model = router.get(task)
     if model_override and (
@@ -305,11 +364,11 @@ _embed_model = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 
 class VLLMEmbeddingFunction:
     """
-    Calls vLLM's OpenAI-compatible /v1/embeddings endpoint on the AMD MI300X GPU.
+    Calls vLLM's /v1/embeddings endpoint on the AMD MI300X GPU.
     Requires a dedicated embedding model served via vLLM (e.g. BAAI/bge-large-en-v1.5).
     """
-    def __init__(self, base_url: str, model: str, api_key: str = "not-required"):
-        self._client = OpenAI(base_url=base_url, api_key=api_key)
+    def __init__(self, base_url: str, model: str):
+        self._client = VLLMClient(base_url=base_url)
         self._model = model
 
     def __call__(self, input: Documents) -> Embeddings:
@@ -322,7 +381,6 @@ if _embed_api_base:
     embedding_fn = VLLMEmbeddingFunction(
         base_url=_embed_api_base,
         model=_embed_model,
-        api_key=os.getenv("OPENAI_API_KEY", "not-required"),
     )
     EMBEDDING_BACKEND = f"GPU · vLLM · {_embed_model}"
 else:
