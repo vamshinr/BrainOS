@@ -4,7 +4,10 @@ import { z } from "zod";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-const Body = z.object({ question: z.string().min(1) });
+const Body = z.object({
+  question: z.string().min(1),
+  model: z.string().optional(),
+});
 
 export async function POST(req: Request) {
   let body: z.infer<typeof Body>;
@@ -18,7 +21,7 @@ export async function POST(req: Request) {
     const backendRes = await fetch("http://localhost:8081/api/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: body.question }),
+      body: JSON.stringify({ query: body.question, model: body.model }),
     });
 
     if (!backendRes.ok) {
@@ -33,6 +36,8 @@ export async function POST(req: Request) {
       used: data.used ?? [],
       retrieved_texts: data.retrieved_texts ?? [],
       latency_ms: data.latency_ms ?? null,
+      retrieval_mode: data.retrieval_mode ?? null,
+      retrieval_debug: data.retrieval_debug ?? null,
       feedback: data.feedback ?? null,
     });
   } catch (e) {

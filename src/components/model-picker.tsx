@@ -93,7 +93,11 @@ export function ModelPicker({
         className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm font-mono"
       >
         <option value="">{defaultLabel}</option>
-        {models.map((m) => {
+        {models.filter((m) => (
+          mode === "vlm"
+            ? m.is_vlm_default || !m.is_text_default
+            : m.is_text_default || !m.is_vlm_default
+        )).map((m) => {
           const isDefault =
             (mode === "vlm" && m.is_vlm_default) ||
             (mode === "text" && m.is_text_default);

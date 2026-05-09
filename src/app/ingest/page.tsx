@@ -264,7 +264,7 @@ export default function IngestPage() {
       {tab === "file" && (
         <form onSubmit={submitFile} className="mt-8 space-y-4">
           <div className="rounded-md border border-zinc-200 bg-zinc-50 dark:bg-zinc-900/30 dark:border-zinc-700 px-4 py-3 text-sm text-zinc-700 dark:text-zinc-300">
-            Upload a <strong>PDF</strong>, <strong>.txt</strong>, <strong>.md</strong>, or <strong>.csv</strong> file.
+            Upload a <strong>PDF</strong>, <strong>Word doc</strong>, <strong>.txt</strong>, <strong>.md</strong>, or <strong>.csv</strong> file.
             The 70B model on the AMD MI300X extracts knowledge units and reconciles them against what the brain already knows.
           </div>
 
@@ -300,11 +300,11 @@ export default function IngestPage() {
             />
           </Field>
 
-          <Field label="File (PDF, TXT, MD, CSV)">
+          <Field label="File (PDF, DOC, DOCX, TXT, MD, CSV)">
             <input
               ref={fileInputRef}
               type="file"
-              accept=".pdf,.txt,.md,.csv,text/plain,text/markdown,text/csv,application/pdf"
+              accept=".pdf,.doc,.docx,.txt,.md,.csv,text/plain,text/markdown,text/csv,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
               required
               className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm file:mr-3 file:rounded file:border-0 file:bg-[var(--foreground)] file:text-[var(--background)] file:px-3 file:py-1 file:text-xs file:font-medium"

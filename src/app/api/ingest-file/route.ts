@@ -9,10 +9,12 @@ const ALLOWED_TYPES = new Set([
   "text/plain",
   "text/markdown",
   "text/csv",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/octet-stream", // fallback for .md files on some OS
 ]);
 
-const ALLOWED_EXTS = /\.(pdf|txt|md|csv)$/i;
+const ALLOWED_EXTS = /\.(pdf|txt|md|csv|doc|docx)$/i;
 
 export async function POST(req: Request) {
   const contentType = req.headers.get("content-type") ?? "";
@@ -35,7 +37,7 @@ export async function POST(req: Request) {
     const ext = file.name.match(ALLOWED_EXTS);
     if (!ext && !ALLOWED_TYPES.has(file.type)) {
       return NextResponse.json(
-        { error: "Unsupported file type. Upload PDF, TXT, MD, or CSV." },
+        { error: "Unsupported file type. Upload PDF, DOC, DOCX, TXT, MD, or CSV." },
         { status: 415 },
       );
     }
@@ -66,6 +68,7 @@ export async function POST(req: Request) {
       sourceId: data.source_id,
       addedUnits: data.units_stored ?? 0,
       addedEntities: data.entities_stored ?? 0,
+      addedRelationships: data.relationships_stored ?? 0,
       supersededUnits: data.units_superseded ?? 0,
       charsExtracted: data.chars_extracted ?? 0,
       totals,

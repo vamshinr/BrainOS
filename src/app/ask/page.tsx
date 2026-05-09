@@ -13,14 +13,41 @@ const SUGGESTIONS = [
 ];
 
 type Feedback = { confidence: number; grounded: boolean; feedback: string };
+type RetrievalHit = { id: string; score?: number | null };
+type RetrievalDebug = {
+  retrieval_mode?: string;
+  temporal_intent?: { mode?: string; target_date?: string | null };
+  vector_unit_hits?: RetrievalHit[];
+  vector_chunk_hits?: RetrievalHit[];
+  bm25_hits?: RetrievalHit[];
+  chunk_bm25_hits?: RetrievalHit[];
+  entity_hits?: RetrievalHit[];
+  graph_hits?: RetrievalHit[];
+  final_unit_ids?: string[];
+  final_chunk_ids?: string[];
+};
 type Answer = {
   question: string;
   answer: string;
   used: string[];
   retrieved_texts: string[];
   latency_ms: number | null;
+  retrieval_mode?: string | null;
+  retrieval_debug?: RetrievalDebug | null;
   feedback: Feedback | null;
 };
+
+function HitList({ label, hits }: { label: string; hits?: RetrievalHit[] }) {
+  const count = hits?.length ?? 0;
+  return (
+    <div className="rounded border bg-[var(--muted)]/20 px-2 py-1.5">
+      <div className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)]">{label}</div>
+      <div className="mt-1 font-mono text-[11px] text-[var(--foreground)]">
+        {count === 0 ? "none" : hits!.slice(0, 4).map((h) => h.id).join(", ")}
+      </div>
+    </div>
+  );
+}
 
 export default function AskPage() {
   const [question, setQuestion] = useState("");
@@ -47,6 +74,8 @@ export default function AskPage() {
           used: j.used ?? [],
           retrieved_texts: j.retrieved_texts ?? [],
           latency_ms: j.latency_ms ?? null,
+          retrieval_mode: j.retrieval_mode ?? null,
+          retrieval_debug: j.retrieval_debug ?? null,
           feedback: j.feedback ?? null,
         },
         ...h,
@@ -66,7 +95,7 @@ export default function AskPage() {
       </div>
       <h1 className="text-3xl font-semibold tracking-tight">Query the brain.</h1>
       <p className="mt-2 text-[var(--muted-foreground)]">
-        Answers are grounded in ChromaDB-retrieved knowledge units from the AMD MI300X 70B model.
+        Answers are grounded with hybrid ChromaDB, BM25, raw-source, and graph retrieval.
       </p>
 
       <form
@@ -141,7 +170,12 @@ export default function AskPage() {
               )}
               {h.retrieved_texts.length > 0 && (
                 <span>
-                  {h.retrieved_texts.length} unit{h.retrieved_texts.length !== 1 ? "s" : ""} retrieved
+                  {h.retrieved_texts.length} context item{h.retrieved_texts.length !== 1 ? "s" : ""} retrieved
+                </span>
+              )}
+              {h.retrieval_mode && (
+                <span className="rounded bg-[var(--muted)]/40 px-2 py-0.5 font-mono">
+                  {h.retrieval_mode}
                 </span>
               )}
               {h.feedback && (
@@ -168,7 +202,7 @@ export default function AskPage() {
             {h.retrieved_texts.length > 0 && (
               <details className="mt-3">
                 <summary className="text-[11px] text-[var(--muted-foreground)] cursor-pointer hover:text-[var(--foreground)] select-none">
-                  Retrieved context ({h.retrieved_texts.length} units sent to model)
+                  Retrieved context ({h.retrieved_texts.length} items sent to model)
                 </summary>
                 <ol className="mt-2 space-y-1 pl-1">
                   {h.retrieved_texts.map((t, idx) => (
@@ -178,6 +212,30 @@ export default function AskPage() {
                     </li>
                   ))}
                 </ol>
+              </details>
+            )}
+
+            {h.retrieval_debug && (
+              <details className="mt-3">
+                <summary className="text-[11px] text-[var(--muted-foreground)] cursor-pointer hover:text-[var(--foreground)] select-none">
+                  Retrieval diagnostics
+                </summary>
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <HitList label="Vector units" hits={h.retrieval_debug.vector_unit_hits} />
+                  <HitList label="Vector chunks" hits={h.retrieval_debug.vector_chunk_hits} />
+                  <HitList label="BM25 units" hits={h.retrieval_debug.bm25_hits} />
+                  <HitList label="BM25 chunks" hits={h.retrieval_debug.chunk_bm25_hits} />
+                  <HitList label="Entities" hits={h.retrieval_debug.entity_hits} />
+                  <HitList label="Graph" hits={h.retrieval_debug.graph_hits} />
+                </div>
+                <div className="mt-2 text-[11px] text-[var(--muted-foreground)] font-mono">
+                  final units: {(h.retrieval_debug.final_unit_ids ?? []).join(", ") || "none"}
+                  <br />
+                  final chunks: {(h.retrieval_debug.final_chunk_ids ?? []).join(", ") || "none"}
+                  <br />
+                  temporal: {h.retrieval_debug.temporal_intent?.mode ?? "unknown"}
+                  {h.retrieval_debug.temporal_intent?.target_date ? ` @ ${h.retrieval_debug.temporal_intent.target_date}` : ""}
+                </div>
               </details>
             )}
 

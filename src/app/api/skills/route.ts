@@ -11,7 +11,7 @@ export async function GET(req: Request) {
   const deptParam = url.searchParams.get("department");
 
   let department: Department | undefined;
-  if (deptParam && (DEPARTMENTS as string[]).includes(deptParam)) {
+  if (deptParam && (DEPARTMENTS as readonly string[]).includes(deptParam)) {
     department = deptParam as Department;
   }
 

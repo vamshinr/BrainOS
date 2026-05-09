@@ -9,6 +9,11 @@ import datetime
 import re
 import io
 import collections
+import zipfile
+import tempfile
+import subprocess
+import shutil
+import xml.etree.ElementTree as ET
 import uvicorn
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -200,9 +205,56 @@ def _resolve_override(task: str, model_override: str | None) -> tuple[OpenAI, st
     return router.get(task)
 
 
+def _resolve_text_override(task: str, model_override: str | None) -> tuple[OpenAI, str]:
+    requested_client = _MODEL_INDEX.get(model_override) if model_override else None
+    default_client, default_model = router.get(task)
+    if model_override and (
+        (model_override == VLM_MODEL_NAME and model_override != default_model)
+        or (requested_client is vlm_client and requested_client is not default_client)
+    ):
+        _debug_event(
+            "model.override.ignored",
+            "Ignoring vision model override for text extraction",
+            task=task,
+            requested=model_override,
+            fallback=default_model,
+        )
+        return default_client, default_model
+    client, model = _resolve_override(task, model_override)
+    _debug_event(
+        "model.route.text",
+        "Resolved text-capable model route",
+        task=task,
+        requested=model_override,
+        model=model,
+    )
+    return client, model
+
+
 # ── Recent-calls log (in-memory ring buffer, surfaced to the dashboard) ──────
 _call_log: collections.deque = collections.deque(maxlen=80)
 _call_lock = threading.Lock()
+
+
+def _utc_now_iso() -> str:
+    return datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
+
+
+def _debug_value(value) -> str:
+    if isinstance(value, str):
+        value = value.replace("\n", "\\n")
+        if len(value) > 140:
+            value = value[:137] + "..."
+    return str(value)
+
+
+def _debug_event(stage: str, message: str, **fields):
+    details = " | ".join(
+        f"{key}={_debug_value(value)}" for key, value in fields.items()
+        if value is not None
+    )
+    suffix = f" | {details}" if details else ""
+    print(f"[BrainOS][{_utc_now_iso()}][{stage}] {message}{suffix}")
 
 
 def _log_call(
@@ -217,7 +269,7 @@ def _log_call(
 ):
     with _call_lock:
         _call_log.append({
-            "ts": datetime.datetime.utcnow().isoformat() + "Z",
+            "ts": _utc_now_iso(),
             "task": task,
             "model": model,
             "latency_ms": latency_ms,
@@ -297,9 +349,15 @@ _json_lock = threading.Lock()
 def _read_brain() -> dict:
     try:
         with open(BRAIN_JSON, "r") as f:
-            return json.load(f)
+            state = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"sources": [], "entities": [], "units": []}
+        state = {}
+    state.setdefault("sources", [])
+    state.setdefault("entities", [])
+    state.setdefault("units", [])
+    state.setdefault("relationships", [])
+    state.setdefault("rawChunks", [])
+    return state
 
 def _write_brain(state: dict):
     with _json_lock:
@@ -309,21 +367,88 @@ def _write_brain(state: dict):
 # ── In-memory BM25 + entity indexes ───────────────────────────────────────────
 _bm25_index: object = None           # BM25Okapi instance (None until first ingest)
 _bm25_unit_ids: list[str] = []       # parallel to _bm25_corpus
-_bm25_corpus: list[str] = []         # raw unit statements
+_bm25_corpus: list[str] = []         # searchable unit text
+_chunk_bm25_index: object = None     # BM25Okapi over raw source chunks
+_chunk_ids: list[str] = []           # parallel to _chunk_corpus
+_chunk_corpus: list[str] = []        # searchable raw chunk text
 _entity_index: dict[str, set[str]] = {}  # entity_name_lower → {unit_id, ...}
+
+
+def _tokenize_search(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9][a-z0-9_.:/-]*", text.lower())
+
+
+def _unit_search_text(unit: dict) -> str:
+    evidence = " ".join(
+        e.get("quote", "") for e in unit.get("evidence", [])
+        if isinstance(e, dict)
+    )
+    temporal = " ".join(str(unit.get(k, "")) for k in (
+        "validFrom", "validTo", "effectiveDate", "observedAt", "supersededAt", "temporalStatus",
+    ))
+    return " ".join([
+        unit.get("statement", ""),
+        unit.get("subject", ""),
+        unit.get("kind", ""),
+        unit.get("department", ""),
+        unit.get("sector", ""),
+        temporal,
+        " ".join(unit.get("entities", [])),
+        evidence,
+    ])
+
+
+_ENTITY_TOKEN_RE = re.compile(
+    r"(?:\b[a-z][a-z0-9]+(?:-[a-z0-9]+)+\b|/[a-z0-9][a-z0-9_./:-]*|\b[A-Z][A-Za-z0-9]*(?:[A-Z][A-Za-z0-9]*)+\b|\b[A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+){0,2}\b)"
+)
+
+
+def _fallback_entities_from_text(text: str) -> list[str]:
+    """Best-effort retrieval aliases from raw text; these are not asserted facts."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in _ENTITY_TOKEN_RE.findall(text or ""):
+        value = match.strip(".,;:()[]{}'\"")
+        if len(value) < 3:
+            continue
+        if value.lower() in {
+            "the", "and", "or", "but", "for", "with", "from", "this", "that",
+            "when", "then", "before", "after", "source", "title",
+        }:
+            continue
+        key = value.lower()
+        if key not in seen:
+            seen.add(key)
+            found.append(value)
+    return found[:80]
+
 
 def _build_indexes(brain: dict):
     """Rebuild BM25 + entity indexes from brain state. Called on startup and after every ingest."""
-    global _bm25_index, _bm25_unit_ids, _bm25_corpus, _entity_index
-    active = [u for u in brain.get("units", []) if not u.get("stale") and not u.get("supersededBy")]
-    _bm25_unit_ids = [u["id"] for u in active]
-    _bm25_corpus   = [u["statement"] for u in active]
-    tokenized      = [stmt.lower().split() for stmt in _bm25_corpus]
+    global _bm25_index, _bm25_unit_ids, _bm25_corpus, _chunk_bm25_index, _chunk_ids, _chunk_corpus, _entity_index
+    indexable = [u for u in brain.get("units", []) if u.get("id")]
+    _bm25_unit_ids = [u["id"] for u in indexable]
+    _bm25_corpus   = [_unit_search_text(u) for u in indexable]
+    tokenized      = [_tokenize_search(stmt) for stmt in _bm25_corpus]
     _bm25_index    = BM25Okapi(tokenized) if tokenized else None
+
+    chunks = [c for c in brain.get("rawChunks", []) if c.get("id") and c.get("text")]
+    _chunk_ids = [c["id"] for c in chunks]
+    _chunk_corpus = [c.get("text", "") for c in chunks]
+    chunk_tokenized = [_tokenize_search(text) for text in _chunk_corpus]
+    _chunk_bm25_index = BM25Okapi(chunk_tokenized) if chunk_tokenized else None
+
     _entity_index  = {}
-    for u in active:
+    for u in indexable:
+        subject = u.get("subject", "").lower().strip()
+        if subject:
+            _entity_index.setdefault(subject, set()).add(u["id"])
         for ent in u.get("entities", []):
             key = ent.lower().strip()
+            if key:
+                _entity_index.setdefault(key, set()).add(u["id"])
+        for alias in _fallback_entities_from_text(_unit_search_text(u)):
+            key = alias.lower().strip()
             if key:
                 _entity_index.setdefault(key, set()).add(u["id"])
 
@@ -334,6 +459,125 @@ def _rrf_fuse(ranked_lists: list[list[str]], k: int = 60) -> list[str]:
         for rank, uid in enumerate(ranked):
             scores[uid] = scores.get(uid, 0.0) + 1.0 / (k + rank + 1)
     return sorted(scores, key=lambda x: scores[x], reverse=True)
+
+
+_TEMPORAL_STATUSES = {"current", "future", "expired", "historical", "unknown"}
+
+
+def _parse_date(value: str | None) -> datetime.date | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def _normalize_date(value: str | None) -> str | None:
+    parsed = _parse_date(value)
+    return parsed.isoformat() if parsed else None
+
+
+def _today_utc() -> datetime.date:
+    return datetime.datetime.now(datetime.UTC).date()
+
+
+def _infer_temporal_status(unit: dict, source: dict | None = None) -> str:
+    today = _today_utc()
+    status = str(unit.get("temporal_status") or unit.get("temporalStatus") or "").strip().lower()
+    if status in _TEMPORAL_STATUSES:
+        return status
+
+    valid_from = _parse_date(unit.get("valid_from") or unit.get("validFrom"))
+    valid_to = _parse_date(unit.get("valid_to") or unit.get("validTo"))
+    effective = _parse_date(unit.get("effective_date") or unit.get("effectiveDate"))
+    observed = _parse_date(unit.get("observed_at") or unit.get("observedAt"))
+
+    if valid_to and valid_to < today:
+        return "expired"
+    if effective and effective > today:
+        return "future"
+    if valid_from and valid_from > today:
+        return "future"
+    if valid_to or valid_from or effective or observed:
+        return "current"
+    if source and _parse_date(source.get("capturedAt")):
+        return "unknown"
+    return "unknown"
+
+
+def _temporal_fields(unit: dict, source: dict | None = None) -> dict:
+    observed = (
+        _normalize_date(unit.get("observed_at") or unit.get("observedAt"))
+        or _normalize_date(source.get("capturedAt") if source else None)
+    )
+    fields = {
+        "validFrom": _normalize_date(unit.get("valid_from") or unit.get("validFrom")),
+        "validTo": _normalize_date(unit.get("valid_to") or unit.get("validTo")),
+        "effectiveDate": _normalize_date(unit.get("effective_date") or unit.get("effectiveDate")),
+        "observedAt": observed,
+        "temporalStatus": _infer_temporal_status(unit, source),
+    }
+    return {k: v for k, v in fields.items() if v}
+
+
+def _detect_temporal_intent(query: str) -> dict:
+    q = query.lower()
+    if re.search(r"\b(now|current|currently|today|latest|active)\b", q):
+        return {"mode": "current", "target_date": _today_utc().isoformat()}
+    if re.search(r"\b(after|from|starting|effective)\b", q):
+        mode = "future"
+    elif re.search(r"\b(before|previously|past|historical|history|old|q[1-4])\b", q):
+        mode = "historical"
+    else:
+        mode = "general"
+
+    date_match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", q)
+    target_date = date_match.group(1) if date_match else None
+    if not target_date:
+        month_match = re.search(
+            r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(20\d{2})\b",
+            q,
+        )
+        if month_match:
+            month = [
+                "january", "february", "march", "april", "may", "june",
+                "july", "august", "september", "october", "november", "december",
+            ].index(month_match.group(1)) + 1
+            target_date = datetime.date(int(month_match.group(2)), month, 1).isoformat()
+    if target_date and mode == "general":
+        mode = "date"
+    return {"mode": mode, "target_date": target_date}
+
+
+def _unit_temporal_score(unit: dict, intent: dict) -> float:
+    mode = intent.get("mode", "general")
+    status = unit.get("temporalStatus", "unknown")
+    target_date = _parse_date(intent.get("target_date"))
+    valid_from = _parse_date(unit.get("validFrom"))
+    valid_to = _parse_date(unit.get("validTo"))
+    effective = _parse_date(unit.get("effectiveDate"))
+
+    if target_date:
+        start = effective or valid_from
+        end = valid_to
+        if start and start > target_date:
+            return 0.7 if mode == "future" else 0.65
+        if end and end < target_date:
+            return 1.15 if mode == "historical" else 0.75
+        if (not start or start <= target_date) and (not end or target_date <= end):
+            return 1.35
+
+    if mode == "current":
+        return {"current": 1.35, "unknown": 1.0, "future": 0.65, "historical": 0.55, "expired": 0.45}.get(status, 1.0)
+    if mode == "future":
+        return {"future": 1.4, "current": 1.0, "unknown": 0.9, "historical": 0.55, "expired": 0.5}.get(status, 1.0)
+    if mode == "historical":
+        return {"historical": 1.35, "expired": 1.25, "current": 0.9, "unknown": 0.85, "future": 0.45}.get(status, 1.0)
+    return {"current": 1.1, "unknown": 1.0, "future": 0.95, "historical": 0.85, "expired": 0.75}.get(status, 1.0)
 
 # Bootstrap indexes from persisted brain.json on startup
 _startup_brain = _read_brain()
@@ -435,9 +679,18 @@ E. RELATIONSHIP RULES:
 
 F. SKIP NON-DURABLE NOISE: greetings, scheduling, "lgtm", "+1", chitchat, jokes.
 
-G. TEMPORAL CUES: when the text says "as of", "took over", "previously", "no longer",
-   "migrated from X to Y" — emit ONLY the current-state unit. The brain handles the
-   supersession of the older fact.
+G. TEMPORAL CUES: preserve time instead of flattening it.
+   - If the text says "as of", "effective", "starts", "until", "through",
+     "previously", "no longer", "deprecated by", "after", "before", or gives
+     a quarter/month/date, emit the relevant temporal fields.
+   - Do NOT collapse future facts into current facts. Example:
+       "Bob takes over billing-svc effective 2026-06-01"
+       means Bob's ownership is future until that date.
+   - Do NOT delete historical state. Example:
+       "Alice owns billing-svc until 2026-06-01" is a valid dated fact.
+   - Use ISO dates (YYYY-MM-DD) whenever the source provides enough information.
+   - If the source says "next month" or "last Tuesday", infer from the source date
+     only when obvious; otherwise leave the date empty and set temporal_status unknown.
 
 ==================================================================================
 OUTPUT FORMAT — JSON only, no markdown fences, no preamble
@@ -455,9 +708,12 @@ OUTPUT FORMAT — JSON only, no markdown fences, no preamble
       "entities": ["string"],
       "evidence_quote": "string",
       "confidence": 0.0,
-      "sector": "HR|Legal|Finance|Engineering|Product|Supply Chain|General"
-      "evidence_quote": "literal substring from source",
-      "confidence": 0.0
+      "sector": "HR|Legal|Finance|Engineering|Product|Supply Chain|General",
+      "valid_from": "YYYY-MM-DD or empty",
+      "valid_to": "YYYY-MM-DD or empty",
+      "effective_date": "YYYY-MM-DD or empty",
+      "observed_at": "YYYY-MM-DD or empty",
+      "temporal_status": "current|future|expired|historical|unknown"
     }
   ],
   "relationships": [
@@ -482,7 +738,7 @@ def _parse_extraction_json(raw: str) -> dict:
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        return {"entities": [], "units": []}
+        return {"entities": [], "units": [], "relationships": []}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -542,15 +798,41 @@ def _merge_extractions(results: list[dict]) -> dict:
 class IngestionAgent:
     """Reads raw content (text or image) and extracts structured knowledge via the LLM."""
 
-    def _extract_chunk(self, source_type: str, title: str, chunk: str, model_override: str | None = None) -> dict:
+    def _extract_chunk(
+        self,
+        source_type: str,
+        title: str,
+        chunk: str,
+        model_override: str | None = None,
+        *,
+        retry: bool = False,
+    ) -> dict:
+        retry_instructions = ""
+        if retry:
+            retry_instructions = (
+                "\n\nThe previous pass returned no durable knowledge. Re-read carefully and "
+                "extract operational facts, named services, owners, unsafe windows, APIs, "
+                "policies, gotchas, dates, teams, tools, and relationships. Return empty "
+                "arrays only if this chunk truly contains no company knowledge."
+            )
         prompt = (
             f"SOURCE TYPE: {source_type}\n"
             f"TITLE: {title}\n"
             f"---\n{chunk}\n---\n\n"
             "Extract entities, knowledge units, and relationships per the system instructions."
+            f"{retry_instructions}"
         )
-        client, model = _resolve_override("extraction", model_override)
+        client, model = _resolve_text_override("extraction", model_override)
         t0 = time.time()
+        _debug_event(
+            "extract.chunk.start",
+            "Sending chunk to extraction model",
+            source_type=source_type,
+            title=title,
+            model=model,
+            chars=len(chunk),
+            retry=retry,
+        )
         try:
             response = client.chat.completions.create(
                 model=model,
@@ -569,21 +851,84 @@ class IngestionAgent:
                 completion_tokens=getattr(usage, "completion_tokens", None),
                 note=f"chunk len={len(chunk)}",
             )
-            return _parse_extraction_json(response.choices[0].message.content)
+            parsed = _parse_extraction_json(response.choices[0].message.content)
+            parsed.setdefault("entities", [])
+            parsed.setdefault("units", [])
+            parsed.setdefault("relationships", [])
+            _debug_event(
+                "extract.chunk.done",
+                "Extraction model returned structured data",
+                model=model,
+                latency_ms=latency_ms,
+                units=len(parsed.get("units", [])),
+                entities=len(parsed.get("entities", [])),
+                relationships=len(parsed.get("relationships", [])),
+                retry=retry,
+            )
+            return parsed
         except Exception as e:
             _log_call("extraction", model, int((time.time() - t0) * 1000), ok=False, note=str(e)[:80])
-            print(f"[IngestionAgent] Chunk extraction error: {e}")
+            _debug_event(
+                "extract.chunk.error",
+                "Extraction model failed",
+                model=model,
+                latency_ms=int((time.time() - t0) * 1000),
+                error=e,
+            )
             return {"entities": [], "units": [], "relationships": []}
 
     def extract_from_text(self, source_type: str, title: str, content: str, model_override: str | None = None) -> dict:
+        _debug_event(
+            "extract.text.start",
+            "Preparing text for extraction",
+            source_type=source_type,
+            title=title,
+            chars=len(content),
+            model_override=model_override,
+        )
         chunks = _chunk_text(content, max_chars=3500, overlap=300)
-        if len(chunks) > 1:
-            print(f"[IngestionAgent] Long content ({len(content)} chars) split into {len(chunks)} chunks")
-        results = [self._extract_chunk(source_type, title, chunk, model_override=model_override) for chunk in chunks]
+        _debug_event(
+            "extract.text.chunks",
+            "Text chunking complete",
+            source_type=source_type,
+            chunks=len(chunks),
+            chunk_chars=",".join(str(len(chunk)) for chunk in chunks),
+        )
+        results = []
+        for idx, chunk in enumerate(chunks, start=1):
+            result = self._extract_chunk(source_type, title, chunk, model_override=model_override)
+            empty_result = not (
+                result.get("units") or result.get("entities") or result.get("relationships")
+            )
+            if empty_result and len(chunk.strip()) >= 800:
+                _debug_event(
+                    "extract.chunk.retry",
+                    "Retrying extraction because a substantial chunk returned no knowledge",
+                    source_type=source_type,
+                    title=title,
+                    chunk=idx,
+                    chars=len(chunk),
+                )
+                retry_result = self._extract_chunk(
+                    source_type,
+                    title,
+                    chunk,
+                    model_override=model_override,
+                    retry=True,
+                )
+                if retry_result.get("units") or retry_result.get("entities") or retry_result.get("relationships"):
+                    result = retry_result
+            results.append(result)
         merged = _merge_extractions(results)
-        print(f"[IngestionAgent] Extracted {len(merged['units'])} units, "
-              f"{len(merged['entities'])} entities, "
-              f"{len(merged['relationships'])} relationships from {len(chunks)} chunk(s)")
+        _debug_event(
+            "extract.text.done",
+            "Merged extraction results",
+            source_type=source_type,
+            chunks=len(chunks),
+            units=len(merged["units"]),
+            entities=len(merged["entities"]),
+            relationships=len(merged["relationships"]),
+        )
         return merged
 
     def describe_image(self, image_data: bytes, mime_type: str = "image/png", model_override: str | None = None) -> str:
@@ -595,6 +940,13 @@ class IngestionAgent:
         data_url = f"data:{mime_type};base64,{b64}"
         client, model = _resolve_override("vlm", model_override)
         t0 = time.time()
+        _debug_event(
+            "image.describe.start",
+            "Sending image to vision model",
+            mime_type=mime_type,
+            bytes=len(image_data),
+            model=model,
+        )
         try:
             response = client.chat.completions.create(
                 model=model,
@@ -634,9 +986,24 @@ class IngestionAgent:
                 completion_tokens=getattr(usage, "completion_tokens", None),
                 note=f"image {len(image_data)} bytes",
             )
-            return response.choices[0].message.content
+            description = response.choices[0].message.content
+            _debug_event(
+                "image.describe.done",
+                "Vision model returned description",
+                model=model,
+                latency_ms=latency_ms,
+                chars=len(description or ""),
+            )
+            return description
         except Exception as e:
             _log_call("vlm", model, int((time.time() - t0) * 1000), ok=False, note=str(e)[:80])
+            _debug_event(
+                "image.describe.error",
+                "Vision model failed",
+                model=model,
+                latency_ms=int((time.time() - t0) * 1000),
+                error=e,
+            )
             return f"[VLM description unavailable — configure VLM_API_BASE and VLM_MODEL_NAME. Error: {e}]"
 
 
@@ -737,7 +1104,7 @@ class StructuringAgent:
                 "distance": dist,
             }
             for cid, dist, doc, m in zip(ids, distances, docs, metas)
-            if dist < 0.30 and cid != new_uid
+            if dist < 0.30 and cid != new_uid and (m or {}).get("doc_type", "unit") == "unit"
         ]
 
         if not candidates:
@@ -801,8 +1168,19 @@ class StructuringAgent:
         units: list,
         entities: list,
         relationships: list | None = None,
+        raw_chunks: list[str] | None = None,
     ) -> dict:
-        now = datetime.datetime.utcnow().isoformat() + "Z"
+        now = _utc_now_iso()
+        _debug_event(
+            "store.start",
+            "Preparing extracted data for storage",
+            source_id=source_id,
+            source_kind=source.get("kind"),
+            units_in=len(units),
+            entities_in=len(entities),
+            relationships_in=len(relationships or []),
+            raw_chunks=len(raw_chunks or []),
+        )
 
         # ── Step 1: build unit objects ──────────────────────────────────────
         # The LLM often splits subject ("Alice Chen") and statement ("owns
@@ -825,6 +1203,7 @@ class StructuringAgent:
             dept = (u.get("department") or "general").strip().lower()
             if dept not in VALID_DEPTS:
                 dept = "general"
+            temporal = _temporal_fields(u, source)
             pending.append((uid, {
                 "id": uid,
                 "kind": u.get("kind", "fact"),
@@ -837,6 +1216,7 @@ class StructuringAgent:
                 "confidence": float(u.get("confidence", 0.7)),
                 "createdAt": now,
                 "updatedAt": now,
+                **temporal,
             }))
 
         # ── Step 2: upsert all into ChromaDB first so reconciliation can query ──
@@ -851,10 +1231,17 @@ class StructuringAgent:
             return stmt
 
         if pending:
+            _debug_event(
+                "store.chroma.upsert",
+                "Upserting units into ChromaDB",
+                source_id=source_id,
+                pending_units=len(pending),
+            )
             collection.upsert(
                 ids=[uid for uid, _ in pending],
                 documents=[_full_text(unit) for _, unit in pending],
                 metadatas=[{
+                    "doc_type": "unit",
                     "source_id": source_id,
                     "kind": unit["kind"],
                     "subject": unit["subject"],
@@ -880,7 +1267,10 @@ class StructuringAgent:
                 except Exception:
                     pass
                 continue
-            superseded_ids.update(rec["superseded_ids"])
+            if unit.get("temporalStatus") == "future":
+                unit["pendingSupersedes"] = rec["superseded_ids"]
+            else:
+                superseded_ids.update(rec["superseded_ids"])
             for target_id in rec["conflicts_with"]:
                 conflict_pairs.setdefault(target_id, set()).add(uid)
                 # Mark the new unit as disputed and store back-reference
@@ -888,8 +1278,58 @@ class StructuringAgent:
                 unit.setdefault("conflictsWith", []).append(target_id)
             stored_units.append(unit)
 
+        _debug_event(
+            "store.reconcile.done",
+            "Reconciliation complete",
+            source_id=source_id,
+            pending_units=len(pending),
+            stored_units=len(stored_units),
+            superseded=len(superseded_ids),
+            conflict_targets=len(conflict_pairs),
+        )
+
         # ── Step 4: merge into brain.json ───────────────────────────────────
         brain = _read_brain()
+
+        if not isinstance(brain.get("rawChunks"), list):
+            brain["rawChunks"] = []
+        new_raw_chunks = []
+        for idx, chunk in enumerate(raw_chunks or [], start=1):
+            text = (chunk or "").strip()
+            if not text:
+                continue
+            chunk_id = f"{source_id}:chunk:{idx}"
+            entry = {
+                "id": chunk_id,
+                "sourceId": source_id,
+                "sourceTitle": source.get("title", ""),
+                "kind": source.get("kind", "doc"),
+                "chunkIndex": idx,
+                "text": text[:6000],
+                "charCount": len(text),
+                "createdAt": now,
+            }
+            brain["rawChunks"].insert(0, entry)
+            new_raw_chunks.append(entry)
+
+        if new_raw_chunks:
+            _debug_event(
+                "store.chroma.raw_chunks",
+                "Upserting raw source chunks into ChromaDB",
+                source_id=source_id,
+                raw_chunks=len(new_raw_chunks),
+            )
+            collection.upsert(
+                ids=[chunk["id"] for chunk in new_raw_chunks],
+                documents=[chunk["text"] for chunk in new_raw_chunks],
+                metadatas=[{
+                    "doc_type": "raw_chunk",
+                    "source_id": source_id,
+                    "source_title": chunk.get("sourceTitle", ""),
+                    "kind": chunk.get("kind", "doc"),
+                    "chunk_index": chunk.get("chunkIndex", 0),
+                } for chunk in new_raw_chunks],
+            )
 
         # Entity dedup by name (case-insensitive)
         new_entities = []
@@ -916,6 +1356,10 @@ class StructuringAgent:
             if bu["id"] in superseded_ids and not bu.get("stale"):
                 bu["stale"] = True
                 bu["supersededBy"] = stored_units[0]["id"] if stored_units else "unknown"
+                bu["supersededAt"] = now
+                if not bu.get("validTo"):
+                    bu["validTo"] = now[:10]
+                bu["temporalStatus"] = "historical"
                 superseded_count += 1
 
         # Mark existing units as disputed when a new unit conflicts with them.
@@ -967,97 +1411,308 @@ class StructuringAgent:
         _write_brain(brain)
         _build_indexes(brain)
 
+        _debug_event(
+            "store.done",
+            "Brain state written and indexes rebuilt",
+            source_id=source_id,
+            units_stored=len(stored_units),
+            entities_stored=len(new_entities),
+            relationships_stored=len(new_rels),
+            raw_chunks_stored=len(new_raw_chunks),
+            chroma_total=collection.count(),
+            brain_sources=len(brain["sources"]),
+            brain_units=len(brain["units"]),
+            brain_raw_chunks=len(brain.get("rawChunks", [])),
+        )
+
         return {
             "units_stored": len(stored_units),
             "units_superseded": superseded_count,
             "units_disputed": disputed_count,
             "entities_stored": len(new_entities),
             "relationships_stored": len(new_rels),
+            "raw_chunks_stored": len(new_raw_chunks),
             "chroma_total": collection.count(),
             "brain_totals": {
                 "sources": len(brain["sources"]),
                 "entities": len(brain["entities"]),
                 "units": len(brain["units"]),
                 "relationships": len(brain["relationships"]),
+                "rawChunks": len(brain.get("rawChunks", [])),
             },
         }
 
 
 class ExecutionAgent:
-    """Semantic retrieval from ChromaDB + grounded generation via the 70B model."""
+    """Hybrid retrieval over ChromaDB, BM25, raw chunks, and brain.json graph state."""
 
     def execute(self, query: str, n_results: int = 6, model_override: str | None = None) -> dict:
         t0 = time.time()
 
-        count = collection.count()
-        retrieved_ids, retrieved_docs, retrieved_metas = [], [], []
+        brain = _read_brain()
+        searchable_units = [u for u in brain.get("units", []) if u.get("id")]
+        raw_chunks = [c for c in brain.get("rawChunks", []) if c.get("id") and c.get("text")]
+        unit_by_id = {u["id"]: u for u in searchable_units}
+        chunk_by_id = {c["id"]: c for c in raw_chunks}
+        temporal_intent = _detect_temporal_intent(query)
+        _build_indexes(brain)
 
-        if count > 0:
-            # ── Signal 1: Dense (ChromaDB cosine) ─────────────────────────────
-            dense_r = collection.query(
-                query_texts=[query],
-                n_results=min(n_results * 2, count),
-            )
-            dense_ids   = dense_r["ids"][0]
-            dense_docs  = dense_r["documents"][0]
-            dense_metas = dense_r["metadatas"][0]
+        retrieved_ids: list[str] = []
+        retrieved_docs: list[str] = []
+        retrieved_metas: list[dict] = []
+        retrieved_chunk_ids: list[str] = []
+        retrieved_chunks: list[dict] = []
+        relationship_context: list[str] = []
 
-            # ── Signal 2: BM25 sparse ─────────────────────────────────────────
-            bm25_ranked: list[str] = []
-            if _bm25_index and _bm25_unit_ids:
-                bm25_scores = _bm25_index.get_scores(query.lower().split())
-                bm25_ranked = [
-                    uid for uid, sc in sorted(
-                        zip(_bm25_unit_ids, bm25_scores), key=lambda x: x[1], reverse=True
-                    )[:n_results * 2] if sc > 0
-                ]
+        query_tokens = _tokenize_search(query)
+        debug = {
+            "retrieval_mode": "hybrid_bm25_vector_graph",
+            "temporal_intent": temporal_intent,
+            "vector_unit_hits": [],
+            "vector_chunk_hits": [],
+            "bm25_hits": [],
+            "chunk_bm25_hits": [],
+            "entity_hits": [],
+            "graph_hits": [],
+            "final_unit_ids": [],
+            "final_chunk_ids": [],
+        }
 
-            # ── Signal 3: Entity index ────────────────────────────────────────
-            entity_ranked: list[str] = []
-            if _entity_index:
-                q_tokens = set(query.lower().split())
-                hits: dict[str, int] = {}
-                for ent_key, uid_set in _entity_index.items():
-                    overlap = len(set(ent_key.split()) & q_tokens)
-                    if overlap:
-                        for uid in uid_set:
-                            hits[uid] = hits.get(uid, 0) + overlap
-                entity_ranked = sorted(hits, key=lambda x: hits[x], reverse=True)[:n_results * 2]
+        def _dedupe_ranked(ids: list[str], limit: int | None = None) -> list[str]:
+            out: list[str] = []
+            seen: set[str] = set()
+            for item_id in ids:
+                if item_id and item_id not in seen:
+                    seen.add(item_id)
+                    out.append(item_id)
+                    if limit and len(out) >= limit:
+                        break
+            return out
 
-            # ── RRF fusion ────────────────────────────────────────────────────
-            fused_ids = _rrf_fuse([dense_ids, bm25_ranked, entity_ranked])[:n_results]
-
-            # ── Resolve docs + metas for fused IDs ───────────────────────────
-            dense_lookup = {
-                uid: (doc, meta)
-                for uid, doc, meta in zip(dense_ids, dense_docs, dense_metas)
-            }
-            bm25_pos = {uid: i for i, uid in enumerate(_bm25_unit_ids)}
-
-            for uid in fused_ids:
-                if uid in dense_lookup:
-                    doc, meta = dense_lookup[uid]
-                elif uid in bm25_pos:
-                    doc  = _bm25_corpus[bm25_pos[uid]]
-                    meta = {"kind": "fact", "confidence": 0.7, "subject": "", "sector": "General"}
-                else:
-                    continue
-                retrieved_ids.append(uid)
-                retrieved_docs.append(doc)
-                retrieved_metas.append(meta)
-
-        if retrieved_docs:
-            context_blocks = [
-                f"[{m.get('kind', 'fact')} | {m.get('subject', '')} | sector:{m.get('sector', 'General')} | conf:{m.get('confidence', 0.7):.2f}] {doc}"
-                for doc, m in zip(retrieved_docs, retrieved_metas)
+        def _rank_debug(ids: list[str], scores: dict[str, float] | None = None, limit: int = 12) -> list[dict]:
+            return [
+                {"id": item_id, "score": round(float(scores.get(item_id, 0.0)), 4) if scores else None}
+                for item_id in ids[:limit]
             ]
-            context_section = "\n".join(context_blocks)
-            # Pull disputed/stale flags from brain.json so the answer can flag conflicts.
-            brain = _read_brain()
-            unit_by_id = {u["id"]: u for u in brain.get("units", [])}
 
+        # ── Signal 1: Chroma vector search over units + raw chunks ───────────
+        vector_unit_ranked: list[str] = []
+        vector_chunk_ranked: list[str] = []
+        vector_unit_scores: dict[str, float] = {}
+        vector_chunk_scores: dict[str, float] = {}
+        chroma_total = collection.count()
+        if chroma_total > 0:
+            try:
+                vector_results = collection.query(
+                    query_texts=[query],
+                    n_results=min(max(n_results * 8, 24), chroma_total),
+                )
+                ids = vector_results["ids"][0] if vector_results.get("ids") else []
+                distances = vector_results["distances"][0] if vector_results.get("distances") else []
+                metas = vector_results["metadatas"][0] if vector_results.get("metadatas") else []
+                for cid, dist, meta in zip(ids, distances, metas):
+                    doc_type = (meta or {}).get("doc_type", "unit")
+                    similarity = max(0.0, 1.0 - float(dist or 0.0))
+                    if doc_type == "raw_chunk" or cid in chunk_by_id:
+                        if cid in chunk_by_id:
+                            vector_chunk_ranked.append(cid)
+                            vector_chunk_scores[cid] = similarity
+                    else:
+                        if cid in unit_by_id:
+                            vector_unit_ranked.append(cid)
+                            vector_unit_scores[cid] = similarity
+                vector_unit_ranked = _dedupe_ranked(vector_unit_ranked, n_results * 6)
+                vector_chunk_ranked = _dedupe_ranked(vector_chunk_ranked, n_results * 4)
+                _debug_event(
+                    "retrieve.chroma",
+                    "Chroma vector query complete",
+                    query=query,
+                    total=chroma_total,
+                    unit_hits=len(vector_unit_ranked),
+                    chunk_hits=len(vector_chunk_ranked),
+                )
+            except Exception as e:
+                _debug_event("retrieve.chroma.error", "Chroma vector query failed", query=query, error=e)
+
+        # ── Signal 2: lexical BM25 over enriched unit text ──────────────────
+        bm25_ranked: list[str] = []
+        bm25_scores_by_id: dict[str, float] = {}
+        if _bm25_index and _bm25_unit_ids and query_tokens:
+            bm25_scores = _bm25_index.get_scores(query_tokens)
+            ranked_pairs = sorted(
+                zip(_bm25_unit_ids, bm25_scores), key=lambda x: x[1], reverse=True
+            )[:n_results * 8]
+            bm25_ranked = [uid for uid, sc in ranked_pairs if sc > 0]
+            bm25_scores_by_id = {uid: float(sc) for uid, sc in ranked_pairs if sc > 0}
+
+        # ── Signal 3: lexical BM25 over raw chunks ──────────────────────────
+        chunk_bm25_ranked: list[str] = []
+        chunk_bm25_scores_by_id: dict[str, float] = {}
+        if _chunk_bm25_index and _chunk_ids and query_tokens:
+            chunk_scores = _chunk_bm25_index.get_scores(query_tokens)
+            ranked_pairs = sorted(
+                zip(_chunk_ids, chunk_scores), key=lambda x: x[1], reverse=True
+            )[:n_results * 6]
+            chunk_bm25_ranked = [cid for cid, sc in ranked_pairs if sc > 0]
+            chunk_bm25_scores_by_id = {cid: float(sc) for cid, sc in ranked_pairs if sc > 0}
+
+        # ── Signal 4: direct entity/subject lookup ──────────────────────────
+        entity_ranked: list[str] = []
+        entity_scores: dict[str, float] = {}
+        q_token_set = set(query_tokens)
+        if _entity_index and q_token_set:
+            normalized_query = " ".join(query_tokens)
+            for entity_name, uid_set in _entity_index.items():
+                ent_tokens = set(_tokenize_search(entity_name))
+                if not ent_tokens:
+                    continue
+                phrase_hit = entity_name in normalized_query
+                overlap = len(ent_tokens & q_token_set)
+                if phrase_hit or overlap:
+                    weight = 4.0 if phrase_hit else float(overlap)
+                    for uid in uid_set:
+                        entity_scores[uid] = entity_scores.get(uid, 0.0) + weight
+            entity_ranked = sorted(entity_scores, key=lambda uid: entity_scores[uid], reverse=True)[:n_results * 6]
+
+        # ── Signal 5: one-hop knowledge graph expansion ─────────────────────
+        seed_ids = _rrf_fuse([vector_unit_ranked, bm25_ranked, entity_ranked])[:max(n_results * 2, 10)]
+        seed_entities: set[str] = set()
+        for uid in seed_ids:
+            unit = unit_by_id.get(uid)
+            if not unit:
+                continue
+            if unit.get("subject"):
+                seed_entities.add(unit["subject"].lower())
+            seed_entities.update(ent.lower() for ent in unit.get("entities", []))
+
+        graph_ranked: list[str] = []
+        graph_relationships: list[dict] = []
+        if seed_entities:
+            for rel in brain.get("relationships", []):
+                frm = rel.get("from", "").lower()
+                to = rel.get("to", "").lower()
+                if frm in seed_entities or to in seed_entities:
+                    graph_relationships.append(rel)
+                    rel_uid = rel.get("unitId")
+                    if rel_uid in unit_by_id and rel_uid not in graph_ranked:
+                        graph_ranked.append(rel_uid)
+                    other = to if frm in seed_entities else frm
+                    for unit in searchable_units:
+                        subject = unit.get("subject", "").lower()
+                        entities = {ent.lower() for ent in unit.get("entities", [])}
+                        if other and (subject == other or other in entities):
+                            uid = unit["id"]
+                            if uid not in graph_ranked:
+                                graph_ranked.append(uid)
+                            break
+
+        # ── Fuse and rerank unit candidates with temporal/confidence signals ─
+        source_lists = [
+            (vector_unit_ranked, 2.0),
+            (bm25_ranked, 1.6),
+            (entity_ranked, 1.35),
+            (graph_ranked, 1.0),
+        ]
+        fused_scores: dict[str, float] = {}
+        for ranked, weight in source_lists:
+            for rank, uid in enumerate(ranked):
+                fused_scores[uid] = fused_scores.get(uid, 0.0) + weight / (60 + rank + 1)
+
+        scored_ids = []
+        for uid, base_score in fused_scores.items():
+            unit = unit_by_id.get(uid)
+            if not unit:
+                continue
+            confidence = float(unit.get("confidence", 0.7))
+            temporal_boost = _unit_temporal_score(unit, temporal_intent)
+            stale_penalty = 0.55 if unit.get("stale") or unit.get("supersededBy") else 1.0
+            final_score = base_score * (0.65 + confidence) * temporal_boost * stale_penalty
+            scored_ids.append((uid, final_score))
+        fused_ids = [uid for uid, _ in sorted(scored_ids, key=lambda item: item[1], reverse=True)[:n_results]]
+
+        for uid in fused_ids:
+            unit = unit_by_id.get(uid)
+            if not unit:
+                continue
+            retrieved_ids.append(uid)
+            retrieved_docs.append(unit.get("statement", ""))
+            retrieved_metas.append({
+                "kind": unit.get("kind", "fact"),
+                "confidence": float(unit.get("confidence", 0.7)),
+                "subject": unit.get("subject", ""),
+                "sector": unit.get("sector", "General"),
+                "department": unit.get("department", "general"),
+                "entities": unit.get("entities", []),
+                "disputed": unit.get("disputed", False),
+                "stale": unit.get("stale", False),
+                "supersededBy": unit.get("supersededBy"),
+                "validFrom": unit.get("validFrom"),
+                "validTo": unit.get("validTo"),
+                "effectiveDate": unit.get("effectiveDate"),
+                "temporalStatus": unit.get("temporalStatus", "unknown"),
+            })
+
+        # ── Fuse raw chunk candidates for source-excerpt fallback ────────────
+        chunk_scores: dict[str, float] = {}
+        for ranked, weight in ((vector_chunk_ranked, 1.6), (chunk_bm25_ranked, 1.9)):
+            for rank, cid in enumerate(ranked):
+                chunk_scores[cid] = chunk_scores.get(cid, 0.0) + weight / (60 + rank + 1)
+        fused_chunk_ids = [
+            cid for cid, _ in sorted(chunk_scores.items(), key=lambda item: item[1], reverse=True)
+            if cid in chunk_by_id
+        ][:3]
+        for cid in fused_chunk_ids:
+            chunk = chunk_by_id.get(cid)
+            if not chunk:
+                continue
+            retrieved_chunk_ids.append(cid)
+            retrieved_chunks.append(chunk)
+
+        seen_rels: set[str] = set()
+        for rel in graph_relationships[: max(3, n_results)]:
+            rel_id = rel.get("id") or f"{rel.get('from')}:{rel.get('relation')}:{rel.get('to')}"
+            if rel_id in seen_rels:
+                continue
+            seen_rels.add(rel_id)
+            relationship_context.append(
+                f"{rel.get('from', '')} {rel.get('relation', '')} {rel.get('to', '')}"
+            )
+
+        debug.update({
+            "vector_unit_hits": _rank_debug(vector_unit_ranked, vector_unit_scores),
+            "vector_chunk_hits": _rank_debug(vector_chunk_ranked, vector_chunk_scores),
+            "bm25_hits": _rank_debug(bm25_ranked, bm25_scores_by_id),
+            "chunk_bm25_hits": _rank_debug(chunk_bm25_ranked, chunk_bm25_scores_by_id),
+            "entity_hits": _rank_debug(entity_ranked, entity_scores),
+            "graph_hits": _rank_debug(graph_ranked),
+            "final_unit_ids": retrieved_ids,
+            "final_chunk_ids": retrieved_chunk_ids,
+        })
+
+        _debug_event(
+            "retrieve.hybrid",
+            "Hybrid BM25 + vector + graph retrieval complete",
+            query=query,
+            temporal_mode=temporal_intent.get("mode"),
+            target_date=temporal_intent.get("target_date"),
+            searchable_units=len(searchable_units),
+            raw_chunks=len(raw_chunks),
+            vector_unit_hits=len(vector_unit_ranked),
+            vector_chunk_hits=len(vector_chunk_ranked),
+            bm25_hits=len(bm25_ranked),
+            chunk_bm25_hits=len(chunk_bm25_ranked),
+            entity_hits=len(entity_ranked),
+            graph_hits=len(graph_ranked),
+            relationships=len(relationship_context),
+            final_unit_ids=",".join(retrieved_ids),
+            final_chunk_ids=",".join(retrieved_chunk_ids),
+        )
+
+        if retrieved_docs or retrieved_chunks:
             context_lines = []
             disputed_facts = []
+            if retrieved_docs:
+                context_lines.append("Facts:")
             for i, (uid, doc, m) in enumerate(
                 zip(retrieved_ids, retrieved_docs, retrieved_metas), 1
             ):
@@ -1071,7 +1726,31 @@ class ExecutionAgent:
                 tag_str = f" [{', '.join(tags)}]" if tags else ""
                 dept = m.get("department", "")
                 dept_str = f" ({dept})" if dept and dept != "general" else ""
-                context_lines.append(f"{i}.{tag_str}{dept_str} {doc}")
+                temporal_bits = []
+                if m.get("temporalStatus"):
+                    temporal_bits.append(f"status:{m.get('temporalStatus')}")
+                if m.get("effectiveDate"):
+                    temporal_bits.append(f"effective:{m.get('effectiveDate')}")
+                if m.get("validFrom"):
+                    temporal_bits.append(f"valid_from:{m.get('validFrom')}")
+                if m.get("validTo"):
+                    temporal_bits.append(f"valid_to:{m.get('validTo')}")
+                temporal_str = f" [{', '.join(temporal_bits)}]" if temporal_bits else ""
+                context_lines.append(f"F{i}.{tag_str}{dept_str}{temporal_str} {doc}")
+            if relationship_context:
+                context_lines.append("\nGraph relationships:")
+                for i, rel_text in enumerate(relationship_context, 1):
+                    context_lines.append(f"R{i}. {rel_text}")
+            if retrieved_chunks:
+                context_lines.append("\nRaw source excerpts:")
+                for i, chunk in enumerate(retrieved_chunks, 1):
+                    source_title = chunk.get("sourceTitle") or chunk.get("sourceId", "source")
+                    text = chunk.get("text", "")
+                    if len(text) > 1800:
+                        text = text[:1800] + "..."
+                    context_lines.append(
+                        f"C{i}. [{source_title} chunk {chunk.get('chunkIndex')}] {text}"
+                    )
             context_section = "\n".join(context_lines)
 
             disputed_note = ""
@@ -1082,29 +1761,30 @@ class ExecutionAgent:
                 )
 
             user_prompt = (
-                f"Facts from the company knowledge base:\n"
+                f"Retrieved company knowledge:\n"
                 f"{context_section}\n{disputed_note}\n"
                 f"Question: {query}\n"
                 f"Answer:"
             )
             system_msg = (
                 "You are a company knowledge assistant. Rules:\n"
-                "1. Use ONLY the numbered facts above. Never invent names, services, or numbers.\n"
-                "2. Always name the specific person, team, or system. Never say 'the company' "
-                "or 'someone'.\n"
-                "3. Prefer fresh facts; ignore facts marked SUPERSEDED unless the user explicitly "
-                "asks about historical state.\n"
-                "4. If facts are marked DISPUTED, say so plainly: "
-                "\"The sources disagree — A says X, B says Y.\"\n"
-                "5. If the facts do not answer the question, reply exactly: "
-                "'The brain does not have this information yet.'\n"
-                "6. Be brief. One to three sentences unless the user asks for detail."
+                "1. Use ONLY the Facts, Graph relationships, and Raw source excerpts above. Never invent names, services, or numbers.\n"
+                "2. Facts are the primary source. Raw source excerpts are fallback evidence when extracted facts are missing or incomplete.\n"
+                "3. If you rely on a raw source excerpt because no fact covers the answer, say the answer is based on source excerpt context.\n"
+                "4. Always name the specific person, team, or system. Never say 'the company' or 'someone'.\n"
+                "5. Prefer fresh facts; ignore facts marked SUPERSEDED unless the user explicitly asks about historical state.\n"
+                "6. For time-sensitive questions, use status/effective/valid_from/valid_to metadata. "
+                "For 'now/current' questions, prefer current or unknown facts over future/historical facts. "
+                "For future or historical questions, use the facts matching that date.\n"
+                "7. If facts are marked DISPUTED, say so plainly: \"The sources disagree — A says X, B says Y.\"\n"
+                "8. If the retrieved context does not answer the question, reply exactly: 'The brain does not have this information yet.'\n"
+                "9. Be brief. One to three sentences unless the user asks for detail."
             )
         else:
             user_prompt = f"Question: {query}"
             system_msg = (
-                "The company brain has no knowledge ingested yet. "
-                "Tell the user the brain is empty and they should ingest sources first."
+                "The company brain has no relevant retrieved knowledge. "
+                "Reply exactly: 'The brain does not have this information yet.'"
             )
 
         client, model = _resolve_override("execute", model_override)
@@ -1147,8 +1827,18 @@ class ExecutionAgent:
         return {
             "answer": answer,
             "retrieved_ids": retrieved_ids,
-            "retrieved_docs": retrieved_docs,
+            "retrieved_chunk_ids": retrieved_chunk_ids,
+            "retrieved_docs": (
+                retrieved_docs
+                + [f"[graph] {rel}" for rel in relationship_context]
+                + [
+                    f"[raw chunk:{chunk.get('id')}] {chunk.get('text', '')[:1000]}"
+                    for chunk in retrieved_chunks
+                ]
+            ),
             "latency_ms": latency_ms,
+            "retrieval_mode": "hybrid_bm25_vector_graph",
+            "retrieval_debug": debug,
         }
 
 
@@ -1165,30 +1855,47 @@ class FeedbackAgent:
 
         ctx = "\n".join(f"{i+1}. {d}" for i, d in enumerate(context_docs))
         prompt = (
-            f"You are auditing whether an answer is grounded in retrieved facts.\n\n"
-            f"FACTS:\n{ctx}\n\n"
-            f"QUESTION: {query}\n"
-            f"ANSWER: {answer}\n\n"
-            f"Evaluate whether the answer is grounded in the retrieved context.\n"
-            f"Check: (1) Are all claims in the answer supported by the context? "
-            f"(2) Does the answer cover ALL aspects of the question, or only some?\n"
-            f"If the answer is only partially grounded or misses part of the question, "
-            f"set grounded=false and explain what is missing in the feedback field.\n"
-            f"Respond ONLY with JSON (no markdown):\n"
-            f'{{ "confidence": 0.0-1.0, "grounded": true/false, "partial": true/false, "feedback": "one sentence" }}'
-            f"Evaluate three things:\n"
-            f"  1. ENTITY COVERAGE — every person/team/system named in the answer must "
-            f"appear in the facts. If the answer names someone not in the facts → grounded=false.\n"
-            f"  2. CLAIM SUPPORT — every claim in the answer must be derivable from the facts.\n"
-            f"  3. SCOPE — the answer must address the question, not adjacent topics.\n\n"
-            f"confidence guide:\n"
-            f"  1.0 = every claim directly stated in facts.\n"
-            f"  0.8 = answer is correct but minor inference not in facts.\n"
-            f"  0.5 = partial support; some claim is unverifiable.\n"
-            f"  0.2 = answer fabricates a name, number, or fact.\n"
-            f"  0.0 = answer contradicts the facts or is unrelated.\n\n"
-            f"Reply with JSON only (no markdown, no prose):\n"
-            f'{{ "confidence": 0.0-1.0, "grounded": true/false, "feedback": "one sentence citing fact #s if relevant" }}'
+            "You are the BrainOS grounding judge. Your job is to audit whether an "
+            "answer is supported by the retrieved company context. Be strict about "
+            "unsupported claims, but do not punish an answer for being concise.\n\n"
+            "CONTEXT TYPES:\n"
+            "- Normal numbered items are extracted knowledge units or graph context.\n"
+            "- Items beginning with [raw chunk:...] are raw source excerpts. They are valid evidence, "
+            "but weaker than extracted knowledge units.\n\n"
+            f"RETRIEVED CONTEXT:\n{ctx}\n\n"
+            f"QUESTION:\n{query}\n\n"
+            f"ANSWER:\n{answer}\n\n"
+            "EVALUATION RULES:\n"
+            "1. Every concrete answer claim must be supported by at least one context item.\n"
+            "2. Names, services, dates, numbers, policies, owners, time windows, APIs, and tools "
+            "must appear in or be directly implied by context.\n"
+            "3. If the answer says the brain lacks information, that is grounded only when the "
+            "retrieved context does not answer the question.\n"
+            "4. If the answer relies only on raw chunks, it may still be grounded, but set "
+            "raw_chunk_only=true and cap confidence at 0.82 unless the excerpt states it directly.\n"
+            "5. If the answer contradicts any retrieved fact, set grounded=false and confidence <= 0.2.\n"
+            "6. If the answer is correct but misses part of a multi-part question, set partial=true.\n"
+            "7. Do not require exact wording. Reasonable paraphrases are allowed when the same "
+            "entities and facts are present.\n\n"
+            "SCORE GUIDE:\n"
+            "- 1.00: all claims directly supported by extracted facts/graph context.\n"
+            "- 0.85: all claims supported, with minor paraphrase or raw chunk support.\n"
+            "- 0.65: mostly supported but incomplete or lightly inferred.\n"
+            "- 0.40: weak support; important claim missing.\n"
+            "- 0.20: fabricated or contradicted claim.\n"
+            "- 0.00: unrelated to context or directly contradicts context.\n\n"
+            "Return JSON only. No markdown. No prose outside JSON. Use this exact shape:\n"
+            "{"
+            '"confidence": 0.0, '
+            '"grounded": true, '
+            '"partial": false, '
+            '"raw_chunk_only": false, '
+            '"supporting_context_ids": ["1"], '
+            '"unsupported_claims": [], '
+            '"missing_aspects": [], '
+            '"contradictions": [], '
+            '"feedback": "one short sentence"'
+            "}"
         )
         client, model = _resolve_override("feedback", model_override)
         t0 = time.time()
@@ -1196,7 +1903,7 @@ class FeedbackAgent:
             response = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=160,
+                max_tokens=320,
                 temperature=0.0,
             )
             latency_ms = int((time.time() - t0) * 1000)
@@ -1209,6 +1916,18 @@ class FeedbackAgent:
                 completion_tokens=getattr(usage, "completion_tokens", None),
                 note=f"grounded={parsed.get('grounded', '?')}",
             )
+            try:
+                feedback_confidence = float(parsed.get("confidence", 1.0) or 0.0)
+            except (TypeError, ValueError):
+                feedback_confidence = 0.0
+            if feedback_confidence == 0.0:
+                _debug_event(
+                    "feedback.zero_confidence",
+                    "Feedback model returned zero confidence",
+                    query=query,
+                    raw=raw,
+                    feedback=parsed.get("feedback"),
+                )
             if "confidence" in parsed:
                 return parsed
         except Exception as e:
@@ -1288,8 +2007,23 @@ def health_check():
 
 @app.post("/api/ingest")
 def ingest_text(req: IngestRequest):
+    request_t0 = time.time()
+    _debug_event(
+        "ingest.text.start",
+        "Received text ingestion request",
+        title=req.title,
+        kind=req.kind,
+        url=req.url,
+        model=req.model,
+        chars=len(req.content),
+    )
     source_id = str(uuid.uuid4())[:8]
-    now = datetime.datetime.utcnow().isoformat() + "Z"
+    now = _utc_now_iso()
+    _debug_event(
+        "ingest.text.source",
+        "Created source record",
+        source_id=source_id,
+    )
 
     extraction = ingest_agent.extract_from_text(
         req.kind, req.title, req.content, model_override=req.model,
@@ -1310,6 +2044,19 @@ def ingest_text(req: IngestRequest):
         units=extraction.get("units", []),
         entities=extraction.get("entities", []),
         relationships=extraction.get("relationships", []),
+        raw_chunks=_chunk_text(req.content, max_chars=_MAX_EXTRACTION_CHARS),
+    )
+    _debug_event(
+        "ingest.text.done",
+        "Text ingestion complete",
+        source_id=source_id,
+        elapsed_ms=int((time.time() - request_t0) * 1000),
+        units_extracted=len(extraction.get("units", [])),
+        entities_extracted=len(extraction.get("entities", [])),
+        relationships_extracted=len(extraction.get("relationships", [])),
+        units_stored=result.get("units_stored"),
+        entities_stored=result.get("entities_stored"),
+        relationships_stored=result.get("relationships_stored"),
     )
 
     return {
@@ -1324,36 +2071,131 @@ def ingest_text(req: IngestRequest):
 
 _MAX_EXTRACTION_CHARS = 12_000  # ~3k tokens; keeps prompt well inside 70B context window
 
+
+def _extract_docx_text(data: bytes) -> str:
+    """Extract paragraphs and table text from a .docx file using the zipped Word XML."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as docx:
+            xml_parts = [
+                name for name in docx.namelist()
+                if name == "word/document.xml" or name.startswith("word/header") or name.startswith("word/footer")
+            ]
+            paragraphs: list[str] = []
+            ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+            for part in xml_parts:
+                root = ET.fromstring(docx.read(part))
+                for para in root.findall(".//w:p", ns):
+                    texts = [node.text or "" for node in para.findall(".//w:t", ns)]
+                    line = "".join(texts).strip()
+                    if line:
+                        paragraphs.append(line)
+            return "\n\n".join(paragraphs)
+    except Exception as e:
+        return f"[DOCX extraction failed: {e}]"
+
+
+def _extract_doc_text(filename: str, data: bytes) -> str:
+    """
+    Best-effort legacy .doc extraction. On macOS, textutil can convert old Word
+    documents to text. If unavailable, ask the user to save as .docx.
+    """
+    textutil = shutil.which("textutil")
+    if not textutil:
+        return "[DOC extraction failed: legacy .doc requires macOS textutil. Save the file as .docx and upload again.]"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        src = os.path.join(tmpdir, filename or "upload.doc")
+        out = os.path.join(tmpdir, "upload.txt")
+        with open(src, "wb") as f:
+            f.write(data)
+        try:
+            subprocess.run(
+                [textutil, "-convert", "txt", "-output", out, src],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            with open(out, "r", encoding="utf-8", errors="replace") as f:
+                return f.read()
+        except Exception as e:
+            return f"[DOC extraction failed: {e}]"
+
 def _extract_file_text(filename: str, data: bytes) -> str:
-    """Extract plain text from PDF, TXT, MD, or CSV uploads."""
+    """Extract plain text from PDF, Word, TXT, MD, or CSV uploads."""
     name = filename.lower()
+    _debug_event(
+        "file.extract.start",
+        "Extracting text from uploaded file",
+        filename=filename,
+        bytes=len(data),
+    )
     if name.endswith(".pdf"):
         try:
             reader = PdfReader(io.BytesIO(data))
             pages = [page.extract_text() or "" for page in reader.pages]
             text = "\n\n".join(p for p in pages if p.strip())
+            _debug_event(
+                "file.extract.pdf",
+                "PDF text extraction complete",
+                filename=filename,
+                pages=len(reader.pages),
+                chars=len(text),
+            )
             if not text.strip():
                 return "[PDF has no selectable text — it may be a scanned/image-based PDF. Try the Image tab instead.]"
             return text
         except Exception as e:
+            _debug_event(
+                "file.extract.error",
+                "PDF text extraction failed",
+                filename=filename,
+                error=e,
+            )
             return f"[PDF extraction failed: {e}]"
+    if name.endswith(".docx"):
+        text = _extract_docx_text(data)
+        _debug_event(
+            "file.extract.docx",
+            "DOCX text extraction complete",
+            filename=filename,
+            chars=len(text),
+        )
+        return text
+    if name.endswith(".doc"):
+        text = _extract_doc_text(filename, data)
+        _debug_event(
+            "file.extract.doc",
+            "DOC text extraction complete",
+            filename=filename,
+            chars=len(text),
+        )
+        return text
     # TXT / MD / CSV — decode directly
     for enc in ("utf-8", "latin-1"):
         try:
-            return data.decode(enc)
+            text = data.decode(enc)
+            _debug_event(
+                "file.extract.text",
+                "Plain text decode complete",
+                filename=filename,
+                encoding=enc,
+                chars=len(text),
+            )
+            return text
         except UnicodeDecodeError:
             continue
-    return data.decode("utf-8", errors="replace")
+    text = data.decode("utf-8", errors="replace")
+    _debug_event(
+        "file.extract.text",
+        "Plain text decode complete with replacement characters",
+        filename=filename,
+        encoding="utf-8-replace",
+        chars=len(text),
+    )
+    return text
 
 
-def _chunk_text(text: str, chunk_size: int = _MAX_EXTRACTION_CHARS) -> list[str]:
-    """Split text into chunks that fit inside the LLM context window."""
-    chunks = []
-    for i in range(0, len(text), chunk_size):
-        chunk = text[i:i + chunk_size].strip()
-        if chunk:
-            chunks.append(chunk)
-    return chunks or [text]
 
 
 @app.post("/api/ingest_file")
@@ -1366,37 +2208,98 @@ async def ingest_file(
 ):
     """
     File upload pipeline:
-      PDF/TXT/MD/CSV → text extraction → 70B extraction → ChromaDB → brain.json
+      PDF/DOC/DOCX/TXT/MD/CSV → text extraction → 70B extraction → ChromaDB → brain.json
     """
+    request_t0 = time.time()
+    _debug_event(
+        "ingest.file.start",
+        "Received file ingestion request",
+        title=title,
+        kind=kind,
+        url=url,
+        model=model,
+        filename=file.filename,
+        content_type=file.content_type,
+    )
     data = await file.read()
     filename = file.filename or "upload"
+    _debug_event(
+        "ingest.file.read",
+        "Uploaded file bytes read",
+        filename=filename,
+        bytes=len(data),
+    )
     text = _extract_file_text(filename, data)
 
-    if not text.strip() or text.startswith("[PDF has no selectable") or text.startswith("[PDF extraction failed"):
+    if (
+        not text.strip()
+        or text.startswith("[PDF has no selectable")
+        or text.startswith("[PDF extraction failed")
+        or text.startswith("[DOC extraction failed")
+        or text.startswith("[DOCX extraction failed")
+    ):
+        _debug_event(
+            "ingest.file.reject",
+            "File did not produce ingestible text",
+            filename=filename,
+            detail=text,
+        )
         raise HTTPException(status_code=422, detail=text if text.startswith("[") else "Could not extract any text from the file.")
 
     source_id = str(uuid.uuid4())[:8]
-    now = datetime.datetime.utcnow().isoformat() + "Z"
+    now = _utc_now_iso()
+    _debug_event(
+        "ingest.file.source",
+        "Created source record",
+        source_id=source_id,
+        filename=filename,
+        chars=len(text),
+    )
 
     # Chunk large documents so each LLM call fits inside the context window,
     # then merge all extracted units + entities across chunks.
-    chunks = _chunk_text(text)
+    chunks = _chunk_text(text, max_chars=_MAX_EXTRACTION_CHARS)
+    _debug_event(
+        "ingest.file.chunks",
+        "Top-level file chunking complete",
+        source_id=source_id,
+        chunks=len(chunks),
+        max_chars=_MAX_EXTRACTION_CHARS,
+        chunk_chars=",".join(str(len(chunk)) for chunk in chunks),
+    )
     all_units: list[dict] = []
     all_entities: list[dict] = []
-    for chunk in chunks:
+    all_relationships: list[dict] = []
+    for idx, chunk in enumerate(chunks, start=1):
+        _debug_event(
+            "ingest.file.chunk.start",
+            "Processing file chunk",
+            source_id=source_id,
+            chunk=idx,
+            total_chunks=len(chunks),
+            chars=len(chunk),
+        )
         extraction = ingest_agent.extract_from_text(
             source_type=kind,
             title=title,
             content=chunk,
+            model_override=model,
         )
-        all_units.extend(extraction.get("units", []))
-        all_entities.extend(extraction.get("entities", []))
-    extraction = ingest_agent.extract_from_text(
-        source_type=kind,
-        title=title,
-        content=text,
-        model_override=model,
-    )
+        chunk_units = extraction.get("units", [])
+        chunk_entities = extraction.get("entities", [])
+        chunk_relationships = extraction.get("relationships", [])
+        _debug_event(
+            "ingest.file.chunk.done",
+            "File chunk extraction complete",
+            source_id=source_id,
+            chunk=idx,
+            units=len(chunk_units),
+            entities=len(chunk_entities),
+            relationships=len(chunk_relationships),
+        )
+        all_units.extend(chunk_units)
+        all_entities.extend(chunk_entities)
+        all_relationships.extend(chunk_relationships)
 
     source = {
         "id": source_id,
@@ -1415,9 +2318,21 @@ async def ingest_file(
         source=source,
         units=all_units,
         entities=all_entities,
-        units=extraction.get("units", []),
-        entities=extraction.get("entities", []),
-        relationships=extraction.get("relationships", []),
+        relationships=all_relationships,
+        raw_chunks=chunks,
+    )
+    _debug_event(
+        "ingest.file.done",
+        "File ingestion complete",
+        source_id=source_id,
+        filename=filename,
+        elapsed_ms=int((time.time() - request_t0) * 1000),
+        units_extracted=len(all_units),
+        entities_extracted=len(all_entities),
+        relationships_extracted=len(all_relationships),
+        units_stored=result.get("units_stored"),
+        entities_stored=result.get("entities_stored"),
+        relationships_stored=result.get("relationships_stored"),
     )
 
     return {
@@ -1427,9 +2342,7 @@ async def ingest_file(
         "source_id": source_id,
         "units_extracted": len(all_units),
         "entities_extracted": len(all_entities),
-        "units_extracted": len(extraction.get("units", [])),
-        "entities_extracted": len(extraction.get("entities", [])),
-        "relationships_extracted": len(extraction.get("relationships", [])),
+        "relationships_extracted": len(all_relationships),
         **result,
     }
 
@@ -1447,14 +2360,45 @@ async def ingest_image(
     VLM pipeline:
       image → VLM description → 70B extraction → ChromaDB embedding → brain.json
     """
+    request_t0 = time.time()
+    _debug_event(
+        "ingest.image.start",
+        "Received image ingestion request",
+        title=title,
+        kind=kind,
+        url=url,
+        vlm_model=model,
+        text_model=text_model,
+        filename=file.filename,
+        content_type=file.content_type,
+    )
     image_data = await file.read()
     mime = file.content_type or "image/png"
+    _debug_event(
+        "ingest.image.read",
+        "Uploaded image bytes read",
+        filename=file.filename,
+        mime=mime,
+        bytes=len(image_data),
+    )
 
     # Step 1: VLM converts image to text
     description = ingest_agent.describe_image(image_data, mime, model_override=model)
+    _debug_event(
+        "ingest.image.description",
+        "Image description ready for text extraction",
+        chars=len(description or ""),
+        preview=description or "",
+    )
 
     source_id = str(uuid.uuid4())[:8]
-    now = datetime.datetime.utcnow().isoformat() + "Z"
+    now = _utc_now_iso()
+    _debug_event(
+        "ingest.image.source",
+        "Created source record",
+        source_id=source_id,
+        filename=file.filename,
+    )
 
     # Step 2: 70B model extracts entities + knowledge units from the description
     extraction = ingest_agent.extract_from_text(
@@ -1481,6 +2425,20 @@ async def ingest_image(
         units=extraction.get("units", []),
         entities=extraction.get("entities", []),
         relationships=extraction.get("relationships", []),
+        raw_chunks=[description],
+    )
+    _debug_event(
+        "ingest.image.done",
+        "Image ingestion complete",
+        source_id=source_id,
+        elapsed_ms=int((time.time() - request_t0) * 1000),
+        description_chars=len(description or ""),
+        units_extracted=len(extraction.get("units", [])),
+        entities_extracted=len(extraction.get("entities", [])),
+        relationships_extracted=len(extraction.get("relationships", [])),
+        units_stored=result.get("units_stored"),
+        entities_stored=result.get("entities_stored"),
+        relationships_stored=result.get("relationships_stored"),
     )
 
     return {
@@ -1518,13 +2476,15 @@ def ingest_mock():
             "kind": item.get("source_type", "other"),
             "title": item_title,
             "content": item.get("content", ""),
-            "capturedAt": item.get("timestamp", datetime.datetime.utcnow().isoformat() + "Z"),
+            "capturedAt": item.get("timestamp", _utc_now_iso()),
         }
         result = struct_agent.embed_and_store(
             source_id=source_id,
             source=source,
             units=extraction.get("units", []),
             entities=extraction.get("entities", []),
+            relationships=extraction.get("relationships", []),
+            raw_chunks=_chunk_text(item.get("content", ""), max_chars=_MAX_EXTRACTION_CHARS),
         )
         total_units += result["units_stored"]
         total_entities += result["entities_stored"]
@@ -1539,19 +2499,6 @@ def ingest_mock():
 
 @app.post("/api/ask")
 def ask_brainos(req: QueryRequest):
-    try:
-        exec_result = exec_agent.execute(req.query)
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"LLM unavailable: {e}")
-
-    try:
-        feedback = feedback_agent.evaluate(
-            query=req.query,
-            answer=exec_result["answer"],
-            context_docs=exec_result["retrieved_docs"],
-        )
-    except Exception:
-        feedback = {"confidence": 0.0, "grounded": False, "feedback": "Evaluation unavailable."}
     blocked = _is_sensitive(req.query)
     if blocked:
         return {
@@ -1566,13 +2513,21 @@ def ask_brainos(req: QueryRequest):
             "feedback": {"confidence": 1.0, "grounded": True, "feedback": "Blocked by policy."},
             "blocked_topic": blocked,
         }
-    exec_result = exec_agent.execute(req.query, model_override=req.model)
-    feedback = feedback_agent.evaluate(
-        query=req.query,
-        answer=exec_result["answer"],
-        context_docs=exec_result["retrieved_docs"],
-        model_override=req.model,
-    )
+
+    try:
+        exec_result = exec_agent.execute(req.query, model_override=req.model)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"LLM unavailable: {e}")
+
+    try:
+        feedback = feedback_agent.evaluate(
+            query=req.query,
+            answer=exec_result["answer"],
+            context_docs=exec_result["retrieved_docs"],
+            model_override=req.model,
+        )
+    except Exception:
+        feedback = {"confidence": 0.0, "grounded": False, "feedback": "Evaluation unavailable."}
 
     return {
         "query": req.query,
@@ -1580,6 +2535,8 @@ def ask_brainos(req: QueryRequest):
         "used": exec_result["retrieved_ids"],
         "retrieved_texts": exec_result["retrieved_docs"],  # actual sentences sent to the model
         "latency_ms": exec_result["latency_ms"],
+        "retrieval_mode": exec_result.get("retrieval_mode"),
+        "retrieval_debug": exec_result.get("retrieval_debug"),
         "feedback": feedback,
     }
 
