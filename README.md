@@ -38,7 +38,7 @@ Every company in the world will need this layer. The AI tools exist. The company
 
 ## Table of Contents
 
-1. [The 60-Second Demo](#the-60-second-demo)
+1. [The live Demo](http://129.212.176.117:3000)
 2. [Architecture](#architecture)
 3. [The Four Agents](#the-four-agents)
 4. [Why It's Not Just Another RAG](#why-its-not-just-another-rag)
@@ -51,21 +51,6 @@ Every company in the world will need this layer. The AI tools exist. The company
 11. [Feature Tour](#feature-tour)
 12. [Roadmap](#roadmap)
 13. [Submission & Credits](#submission--credits)
-
----
-
-## The 60-Second Demo
-
-1. Open the [live demo](http://129.212.176.117:3000/). The brain is empty.
-2. **Ingest** a Slack thread (paste): *"Alice owns billing-svc end-to-end."*
-   → A node `Alice Chen`, an `ownership` unit, and a directed edge `Alice → owns → billing-svc` appear in `/map` instantly.
-3. **Ingest** a runbook PDF: *"Bob and Nick took over billing from Alice."*
-   → Reconciliation fires. Alice's old unit strikes through. The graph re-routes ownership to Bob and Nick.
-4. **Ingest** a Notion screenshot (image): the VLM describes a service architecture diagram → `billing-svc → depends-on → Stripe` → graph populates from a *picture*.
-5. **Ingest** a third source claiming Bob is *not* the billing owner.
-   → A pulsing red **Disputed** badge appears. Click `Analyze knowledge gaps` → `open_dispute` flagged for resolution.
-6. **Ask**: "Who owns the billing service?" → grounded answer with source citations and confidence score. Toggle the model dropdown to compare Llama-3.1-70B vs Qwen-2.5-7B answer quality side-by-side.
-7. **Export → SKILLS.md** → drop it into a Claude Code session → ask Claude to "open a PR to update Stripe API key rotation" → it knows who to tag, what runbook to follow, and which gotchas to avoid.
 
 ---
 
@@ -220,7 +205,7 @@ The pitch line: **"Two models. One GPU. One brain."**
 
 ## Why AMD MI300X
 
-- **192 GB HBM3** — single card runs a 70B text model + a 7B VLM + a dedicated embedding model concurrently. **No model swap, no multi-node orchestration, no inference cold start.** On NVIDIA H100 (80 GB) this requires 3+ GPUs.
+- **192 GB HBM3** — single card runs a 32B text model + a 7B VLM + a dedicated embedding model concurrently. **No model swap, no multi-node orchestration, no inference cold start.** On NVIDIA H100 (80 GB) this requires 3+ GPUs.
 - **5.3 TB/s memory bandwidth** — keeps the KV cache hot under multi-tenant load.
 - **vLLM-native serving** — OpenAI-compatible `/v1/chat/completions` and `/v1/embeddings` make the rest of the stack provider-agnostic.
 - **Real Prometheus metrics** — vLLM exposes `/metrics` natively. BrainOS scrapes it for tok/s, queue depth, KV-cache utilization, and per-call latency. The `/metrics` dashboard makes the GPU's work visible to non-engineers.
