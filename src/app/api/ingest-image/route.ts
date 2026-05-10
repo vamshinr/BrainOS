@@ -52,7 +52,10 @@ export async function POST(req: Request) {
       sourceId: data.source_id,
       addedUnits: data.units_stored ?? 0,
       addedEntities: data.entities_stored ?? 0,
+      addedRelationships: data.relationships_stored ?? 0,
+      supersededUnits: data.units_superseded ?? 0,
       vlmDescriptionChars: data.vlm_description_chars ?? 0,
+      fallbackExtraction: data.fallback_extraction ?? false,
       totals,
     });
   } catch (e) {

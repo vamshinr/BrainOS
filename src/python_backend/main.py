@@ -2737,6 +2737,14 @@ async def ingest_image(
         chars=len(description or ""),
         preview=description or "",
     )
+    if not (description or "").strip() or (description or "").startswith("[VLM description unavailable"):
+        _debug_event(
+            "ingest.image.reject",
+            "VLM did not produce an ingestible description",
+            filename=file.filename,
+            detail=description,
+        )
+        raise HTTPException(status_code=502, detail=description or "VLM did not return an image description.")
 
     source_id = str(uuid.uuid4())[:8]
     now = _utc_now_iso()
@@ -2754,6 +2762,21 @@ async def ingest_image(
         content=description,
         model_override=text_model or model,
     )
+    used_fallback_extraction = False
+    if not (
+        extraction.get("units")
+        or extraction.get("entities")
+        or extraction.get("relationships")
+    ):
+        _debug_event(
+            "ingest.image.fallback",
+            "Model returned no structured data for VLM description; using fallback document extractor",
+            source_id=source_id,
+            filename=file.filename,
+            description_chars=len(description or ""),
+        )
+        extraction = _fallback_extract_from_document(f"image/{kind}", title, description)
+        used_fallback_extraction = True
 
     source = {
         "id": source_id,
@@ -2764,6 +2787,7 @@ async def ingest_image(
         "capturedAt": now,
         "imageIngested": True,
         "imageFilename": file.filename,
+        "extractionMode": "fallback" if used_fallback_extraction else "model",
     }
 
     result = struct_agent.embed_and_store(
@@ -2795,6 +2819,7 @@ async def ingest_image(
         "units_extracted": len(extraction.get("units", [])),
         "entities_extracted": len(extraction.get("entities", [])),
         "relationships_extracted": len(extraction.get("relationships", [])),
+        "fallback_extraction": used_fallback_extraction,
         **result,
     }
 
