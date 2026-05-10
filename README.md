@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="public/cover.svg" alt="BrainOS — Company Brain" width="100%" />
+</p>
+
 # Company Brain — BrainOS
 
 > **Live demo:** [http://129.212.176.117:3000/](http://129.212.176.117:3000/)
