@@ -234,6 +234,12 @@ build/
 # Project specific
 data/brain.json
 data/*.json
+data/chroma_db/
+*.bin
+
+# macOS
+.DS_Store
+**/.DS_Store
 
 # AI Agent Settings
 .claude/
