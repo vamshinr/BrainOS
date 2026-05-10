@@ -29,6 +29,8 @@ from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 from chromadb.api.types import Documents, Embeddings
 
+import slack_connector
+
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 load_dotenv()
@@ -3016,6 +3018,69 @@ def clear_all():
     )
     _write_brain({"sources": [], "entities": [], "units": [], "relationships": []})
     return {"ok": True, "cleared": True}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Slack connector
+# ══════════════════════════════════════════════════════════════════════════════
+
+class SlackConnectRequest(BaseModel):
+    token: str
+
+class SlackSelectRequest(BaseModel):
+    channel_ids: list[str]
+    lookback_days: Optional[int] = None
+
+
+def _slack_ingest_bridge(kind: str, title: str, content: str) -> dict:
+    """Adapter so slack_connector.sync_once can drive the existing ingest pipeline."""
+    return ingest_text(IngestRequest(kind=kind, title=title, content=content))
+
+
+@app.post("/api/slack/connect")
+def slack_connect(req: SlackConnectRequest):
+    try:
+        info = slack_connector.connect(req.token)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True, **info}
+
+
+@app.get("/api/slack/channels")
+def slack_channels():
+    try:
+        channels = slack_connector.list_channels()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"channels": channels}
+
+
+@app.post("/api/slack/select")
+def slack_select(req: SlackSelectRequest):
+    return slack_connector.select_channels(req.channel_ids, req.lookback_days)
+
+
+@app.post("/api/slack/sync")
+def slack_sync():
+    result = slack_connector.sync_once(_slack_ingest_bridge)
+    return result
+
+
+@app.get("/api/slack/status")
+def slack_status():
+    return slack_connector.get_status()
+
+
+@app.delete("/api/slack/disconnect")
+def slack_disconnect():
+    slack_connector.disconnect()
+    slack_connector.stop_poll_thread()
+    return {"ok": True}
+
+
+@app.on_event("startup")
+def _start_slack_poll():
+    slack_connector.start_poll_thread(_slack_ingest_bridge)
 
 
 if __name__ == "__main__":

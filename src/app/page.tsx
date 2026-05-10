@@ -222,13 +222,19 @@ function EmptyState() {
     <div className="rounded-lg border border-dashed bg-[var(--muted)]/30 px-6 py-10 text-center">
       <div className="text-sm font-medium">No knowledge yet</div>
       <p className="text-xs text-[var(--muted-foreground)] mt-1 max-w-md mx-auto">
-        Drop in a Slack thread, email, ticket, or doc on the Ingest page — or
-        seed with a small example company.
+        New here? Walk through onboarding to get the brain to its first useful answer
+        in three steps. Or jump straight to Ingest, or seed with an example company.
       </p>
       <div className="mt-4 flex items-center justify-center gap-2">
         <Link
+          href="/onboarding"
+          className="text-xs rounded-md bg-[var(--accent)] text-white px-3 py-1.5"
+        >
+          Start onboarding →
+        </Link>
+        <Link
           href="/ingest"
-          className="text-xs rounded-md bg-[var(--foreground)] text-[var(--background)] px-3 py-1.5"
+          className="text-xs rounded-md border bg-[var(--card)] px-3 py-1.5"
         >
           Ingest
         </Link>
