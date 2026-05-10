@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import time
 from typing import Any, Callable, Optional
 
@@ -133,7 +134,10 @@ def create_slack_router(
             "endpoint": config.endpoint,
             "app_id_configured": bool(config.app_id),
             "signing_secret_configured": bool(config.signing_secret),
+            "bot_user_id_configured": bool(config.bot_user_id),
             "allowed_channels": sorted(config.allowed_channels),
+            "auto_answer_channels": sorted(config.auto_answer_channels),
+            "auto_answer_prefixes": list(config.auto_answer_prefixes),
             "default_department": config.default_department,
             "channel_map_entries": len(config.channel_map),
         }
@@ -470,16 +474,87 @@ def create_slack_router(
             "text": "Unknown BrainOS command. Try `/brainos help`.",
         }
 
+    def _strip_slack_mentions(text: str, bot_user_id: str | None) -> str:
+        cleaned = text.strip()
+        if bot_user_id:
+            cleaned = re.sub(rf"<@{re.escape(bot_user_id)}>\s*", "", cleaned).strip()
+        return re.sub(r"<@[A-Z0-9]+>\s*", "", cleaned).strip()
+
+    def _auto_answer_question(text: str, prefixes: tuple[str, ...]) -> str | None:
+        stripped = text.strip()
+        lowered = stripped.lower()
+        for prefix in prefixes:
+            if lowered.startswith(prefix):
+                if prefix[-1:].isalnum() and len(stripped) > len(prefix) and stripped[len(prefix)].isalnum():
+                    continue
+                return stripped[len(prefix):].strip(" :-\t")
+        return None
+
     @router.post("/events")
-    async def events(request: Request):
+    async def events(
+        request: Request,
+        x_slack_request_timestamp: Optional[str] = Header(None),
+        x_slack_signature: Optional[str] = Header(None),
+    ):
+        await _verify_slack_signature(request, x_slack_request_timestamp, x_slack_signature)
         body = await request.json()
         if body.get("type") == "url_verification":
             return PlainTextResponse(body.get("challenge", ""))
+        client = _client()
+        event = body.get("event") or {}
+        event_type = event.get("type")
         debug_event(
             "slack.events.received",
             "Received Slack event callback",
-            event_type=(body.get("event") or {}).get("type"),
+            event_type=event_type,
+            channel_id=event.get("channel"),
         )
-        return {"ok": True}
+        if event_type not in {"app_mention", "message"}:
+            return {"ok": True, "ignored": "unsupported_event_type"}
+        if event.get("subtype") or event.get("bot_id"):
+            return {"ok": True, "ignored": "bot_or_subtype_event"}
+        if client.config.bot_user_id and event.get("user") == client.config.bot_user_id:
+            return {"ok": True, "ignored": "self_event"}
+
+        channel_id = event.get("channel")
+        _ensure_channel_allowed(client, channel_id)
+
+        text = _strip_slack_mentions(str(event.get("text") or ""), client.config.bot_user_id)
+        if event_type == "app_mention":
+            question = text
+        elif channel_id in client.config.auto_answer_channels:
+            question = _auto_answer_question(text, client.config.auto_answer_prefixes)
+        else:
+            return {"ok": True, "ignored": "auto_answer_not_enabled_for_channel"}
+
+        if not question:
+            return {"ok": True, "ignored": "empty_question"}
+
+        debug_event(
+            "slack.events.auto_answer.start",
+            "Answering Slack event through BrainOS",
+            channel_id=channel_id,
+            event_type=event_type,
+            question=question,
+        )
+        result = answer_for_slack(
+            question,
+            exec_agent=exec_agent,
+            feedback_agent=feedback_agent,
+            is_sensitive=is_sensitive,
+            debug_event=debug_event,
+        )
+        thread_ts = event.get("thread_ts") or event.get("ts")
+        try:
+            send_result = client.send_message(channel_id, result["slack_text"], thread_ts=thread_ts)
+        except SlackMCPError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+        return {
+            "ok": True,
+            "answered": True,
+            "channel_id": channel_id,
+            "thread_ts": thread_ts,
+            "slack_send": send_result,
+        }
 
     return router

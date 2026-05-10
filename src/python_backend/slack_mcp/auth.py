@@ -18,7 +18,10 @@ class SlackMCPConfig:
     access_token: str | None
     app_id: str | None
     signing_secret: str | None
+    bot_user_id: str | None
     allowed_channels: set[str]
+    auto_answer_channels: set[str]
+    auto_answer_prefixes: tuple[str, ...]
     default_department: str
     channel_map: dict[str, str]
     endpoint: str = "https://mcp.slack.com/mcp"
@@ -59,11 +62,24 @@ def load_slack_config() -> SlackMCPConfig:
         for item in os.getenv("SLACK_ALLOWED_CHANNELS", "").split(",")
         if item.strip()
     }
+    auto_answer_channels = {
+        item.strip()
+        for item in os.getenv("SLACK_AUTO_ANSWER_CHANNELS", "").split(",")
+        if item.strip()
+    }
+    auto_answer_prefixes = tuple(
+        item.strip().lower()
+        for item in os.getenv("SLACK_AUTO_ANSWER_PREFIXES", "brainos:,brainos,?").split(",")
+        if item.strip()
+    )
     return SlackMCPConfig(
         access_token=os.getenv("SLACK_MCP_ACCESS_TOKEN") or token_data.get("access_token"),
         app_id=os.getenv("SLACK_MCP_APP_ID") or token_data.get("app_id"),
         signing_secret=os.getenv("SLACK_SIGNING_SECRET") or token_data.get("signing_secret"),
+        bot_user_id=os.getenv("SLACK_BOT_USER_ID") or token_data.get("bot_user_id"),
         allowed_channels=allowed,
+        auto_answer_channels=auto_answer_channels,
+        auto_answer_prefixes=auto_answer_prefixes,
         default_department=os.getenv("SLACK_DEFAULT_DEPARTMENT", "general").strip() or "general",
         channel_map={str(k): str(v) for k, v in channel_map.items()},
         endpoint=os.getenv("SLACK_MCP_ENDPOINT", "https://mcp.slack.com/mcp"),

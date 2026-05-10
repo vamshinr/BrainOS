@@ -323,7 +323,29 @@ EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
 # Optional: security gates
 EXPORT_TOKEN=<random-string>          # gates SKILLS.md export
 SENSITIVE_TOPICS=salary,acquisition   # /api/ask refuses queries touching these
+
+# Optional: Slack MCP + Slack Events automation
+SLACK_MCP_ACCESS_TOKEN=xoxp-or-mcp-token
+SLACK_MCP_APP_ID=A1234567890
+SLACK_SIGNING_SECRET=<slack-signing-secret>
+SLACK_ALLOWED_CHANNELS=C1234567890,C2345678901
+SLACK_BOT_USER_ID=U1234567890
+SLACK_AUTO_ANSWER_CHANNELS=C1234567890
+SLACK_AUTO_ANSWER_PREFIXES=brainos:,brainos,?
 ```
+
+Slack slash commands are exposed at `POST /api/slack/slash`, and Slack Events are exposed at
+`POST /api/slack/events`. In Slack, point the Event Subscriptions request URL at your public BrainOS
+web URL plus `/api/slack/events`, for example `https://<your-domain>/api/slack/events`, and subscribe
+to `app_mention` plus `message.channels`. The Next.js route preserves Slack's signature headers and
+forwards the raw event body to the Python backend.
+
+Automation behavior is intentionally gated:
+- App mentions answer in any channel allowed by `SLACK_ALLOWED_CHANNELS`.
+- Normal channel messages only answer in `SLACK_AUTO_ANSWER_CHANNELS`.
+- Normal channel messages must start with one of `SLACK_AUTO_ANSWER_PREFIXES`, for example:
+  `brainos: What is the VeritasGroup GDPR deadline?`
+- Answers are posted back into the same Slack thread with grounded BrainOS citations.
 
 #### 3. Run both processes
 ```bash
