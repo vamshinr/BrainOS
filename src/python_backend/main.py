@@ -2215,6 +2215,189 @@ def ingest_text(req: IngestRequest):
 _MAX_EXTRACTION_CHARS = 12_000  # ~3k tokens; keeps prompt well inside 70B context window
 
 
+def _infer_unit_kind(text: str) -> str:
+    lowered = text.lower()
+    if any(word in lowered for word in ("owner", "owned by", "owns ", "responsible for", "maintained by", "led by")):
+        return "ownership"
+    if any(word in lowered for word in ("must", "required", "requires", "always", "never", "policy", "approval", "approvals")):
+        return "policy"
+    if any(word in lowered for word in ("step ", "deploy", "run ", "create ", "merge ", "tag ", "restart", "escalate")):
+        return "process"
+    if any(word in lowered for word in ("decided", "decision", "chose", "selected", "standardized on")):
+        return "decision"
+    if any(word in lowered for word in ("means", "defined as", "refers to", " is a ", " is an ")):
+        return "definition"
+    if any(word in lowered for word in ("gotcha", "caveat", "avoid", "fails", "failure", "silently", "unless", "except")):
+        return "gotcha"
+    return "fact"
+
+
+def _infer_department(text: str) -> str:
+    lowered = text.lower()
+    if any(word in lowered for word in ("api", "service", "deploy", "infra", "database", "pr ", "repo", "on-call", "incident")):
+        return "engineering"
+    if any(word in lowered for word in ("security", "soc2", "access", "secret", "vulnerability", "audit")):
+        return "security"
+    if any(word in lowered for word in ("contract", "legal", "nda", "privacy", "compliance", "regulatory")):
+        return "legal"
+    if any(word in lowered for word in ("invoice", "billing", "budget", "payment", "pricing", "revenue")):
+        return "finance"
+    if any(word in lowered for word in ("hiring", "pto", "benefits", "performance", "manager", "employee")):
+        return "hr"
+    if any(word in lowered for word in ("customer", "roadmap", "feature", "release", "ux", "backlog")):
+        return "product"
+    if any(word in lowered for word in ("sales", "pipeline", "quota", "account", "renewal")):
+        return "sales"
+    if any(word in lowered for word in ("campaign", "brand", "launch", "content", "comms")):
+        return "marketing"
+    if any(word in lowered for word in ("vendor", "inventory", "shipping", "warehouse", "procurement")):
+        return "operations"
+    return "general"
+
+
+def _infer_sector(department: str) -> str:
+    return {
+        "engineering": "Engineering",
+        "product": "Product",
+        "legal": "Legal",
+        "finance": "Finance",
+        "hr": "HR",
+        "operations": "Supply Chain",
+    }.get(department, "General")
+
+
+def _extract_candidate_entities(text: str) -> list[dict]:
+    candidates: list[str] = []
+    patterns = [
+        r"\b[A-Z][A-Za-z0-9]*(?:[-_/][A-Za-z0-9]+)+(?:\s+[A-Z][A-Za-z0-9]*(?:[-_/][A-Za-z0-9]+)*)*\b",
+        r"\b[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){1,3}\b",
+        r"\b[A-Za-z][A-Za-z0-9_-]*(?:API|DB|SDK|CLI|SVC|svc)\b",
+        r"\b[A-Za-z][A-Za-z0-9_-]*(?:\s+(?:team|service|api|database|platform|policy|runbook))\b",
+    ]
+    for pattern in patterns:
+        candidates.extend(re.findall(pattern, text, flags=re.IGNORECASE if "team|service" in pattern else 0))
+
+    seen: set[str] = set()
+    entities: list[dict] = []
+    stopwords = {"The", "This", "That", "When", "After", "Before", "All", "Every", "Each"}
+    for raw in candidates:
+        name = re.sub(r"\s+", " ", raw).strip(" .,:;()[]")
+        if not name or name.split()[0] in stopwords:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        lowered = key
+        if any(word in lowered for word in ("team", "group")):
+            kind = "team"
+        elif any(word in lowered for word in ("api", "service", "svc", "db", "database", "platform")):
+            kind = "system"
+        elif any(word in lowered for word in ("policy", "runbook", "process")):
+            kind = "process"
+        elif len(name.split()) >= 2 and all(part[:1].isupper() for part in name.split()[:2]):
+            kind = "person"
+        else:
+            kind = "concept"
+        entities.append({"name": name, "kind": kind, "aliases": []})
+        if len(entities) >= 40:
+            break
+    return entities
+
+
+def _fallback_extract_from_document(source_type: str, title: str, text: str) -> dict:
+    """
+    Last-resort extraction for readable uploaded files when the LLM returns no
+    structured JSON. It preserves actionable document sentences as low-confidence
+    units instead of reporting a successful zero-unit ingestion.
+    """
+    normalized = re.sub(r"\r\n?", "\n", text)
+    raw_items = re.split(r"(?:\n\s*){2,}|(?<=[.!?])\s+(?=[A-Z0-9])|\n\s*(?:[-*•]|\d+[.)])\s+", normalized)
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        sentence = re.sub(r"\s+", " ", item).strip(" -\t\n")
+        if len(sentence) < 25 or len(sentence.split()) < 5:
+            continue
+        if sentence.lower() in seen:
+            continue
+        seen.add(sentence.lower())
+        candidates.append(sentence)
+        if len(candidates) >= 24:
+            break
+
+    entities = _extract_candidate_entities(text)
+    entity_names = [entity["name"] for entity in entities]
+    units = []
+    for sentence in candidates:
+        department = _infer_department(sentence)
+        units.append({
+            "kind": _infer_unit_kind(sentence),
+            "department": department,
+            "subject": title,
+            "statement": sentence if title.lower() in sentence.lower() else f"{title}: {sentence}",
+            "entities": [name for name in entity_names if name.lower() in sentence.lower()][:8],
+            "evidence_quote": sentence[:500],
+            "confidence": 0.55,
+            "sector": _infer_sector(department),
+            "valid_from": "",
+            "valid_to": "",
+            "effective_date": "",
+            "observed_at": "",
+            "temporal_status": "unknown",
+        })
+
+    relationships = []
+    for sentence in candidates:
+        lowered = sentence.lower()
+        match = re.search(r"(.+?)\s+is owned by\s+(.+)", sentence, flags=re.IGNORECASE)
+        if match:
+            left = match.group(2).strip(" .,:;")
+            right = match.group(1).strip(" .,:;")
+            verb = "owns"
+        else:
+            match = re.search(r"(.+?)\s+(?:owns|responsible for|requires|uses|integrates with)\s+(.+)", sentence, flags=re.IGNORECASE)
+            if not match:
+                continue
+            left = match.group(1).strip(" .,:;")
+            right = match.group(2).strip(" .,:;")
+            verb = "owns"
+            if "requires" in lowered:
+                verb = "requires"
+            elif "uses" in lowered:
+                verb = "uses"
+            elif "integrates with" in lowered:
+                verb = "integrates-with"
+        if not (left and right):
+            continue
+        relationships.append({"from": left[-80:], "relation": verb, "to": right[:80], "confidence": 0.45})
+        if len(relationships) >= 12:
+            break
+
+    _debug_event(
+        "extract.fallback.done",
+        "Fallback document extraction produced structured data",
+        source_type=source_type,
+        title=title,
+        units=len(units),
+        entities=len(entities),
+        relationships=len(relationships),
+    )
+    return {"entities": entities, "units": units, "relationships": relationships}
+
+
+def _docx_paragraph_text(para: ET.Element, ns: dict[str, str]) -> str:
+    parts: list[str] = []
+    for node in para.iter():
+        if node.tag == f"{{{ns['w']}}}t":
+            parts.append(node.text or "")
+        elif node.tag == f"{{{ns['w']}}}tab":
+            parts.append("\t")
+        elif node.tag == f"{{{ns['w']}}}br":
+            parts.append("\n")
+    return re.sub(r"[ \t]+\n", "\n", "".join(parts)).strip()
+
+
 def _extract_docx_text(data: bytes) -> str:
     """Extract paragraphs and table text from a .docx file using the zipped Word XML."""
     try:
@@ -2228,8 +2411,7 @@ def _extract_docx_text(data: bytes) -> str:
             for part in xml_parts:
                 root = ET.fromstring(docx.read(part))
                 for para in root.findall(".//w:p", ns):
-                    texts = [node.text or "" for node in para.findall(".//w:t", ns)]
-                    line = "".join(texts).strip()
+                    line = _docx_paragraph_text(para, ns)
                     if line:
                         paragraphs.append(line)
             return "\n\n".join(paragraphs)
@@ -2446,6 +2628,21 @@ async def ingest_file(
         all_entities.extend(chunk_entities)
         all_relationships.extend(chunk_relationships)
 
+    used_fallback_extraction = False
+    if not (all_units or all_entities or all_relationships):
+        _debug_event(
+            "ingest.file.fallback",
+            "Model returned no structured data for readable file; using fallback document extractor",
+            source_id=source_id,
+            filename=filename,
+            chars=len(text),
+        )
+        fallback = _fallback_extract_from_document(kind, title, text)
+        all_units = fallback.get("units", [])
+        all_entities = fallback.get("entities", [])
+        all_relationships = fallback.get("relationships", [])
+        used_fallback_extraction = True
+
     source = {
         "id": source_id,
         "kind": kind,
@@ -2456,6 +2653,7 @@ async def ingest_file(
         "uploadedFilename": filename,
         "charCount": len(text),
         "chunkCount": len(chunks),
+        "extractionMode": "fallback" if used_fallback_extraction else "model",
     }
 
     result = struct_agent.embed_and_store(
@@ -2488,6 +2686,7 @@ async def ingest_file(
         "units_extracted": len(all_units),
         "entities_extracted": len(all_entities),
         "relationships_extracted": len(all_relationships),
+        "fallback_extraction": used_fallback_extraction,
         **result,
     }
 

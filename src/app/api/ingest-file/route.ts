@@ -71,6 +71,7 @@ export async function POST(req: Request) {
       addedRelationships: data.relationships_stored ?? 0,
       supersededUnits: data.units_superseded ?? 0,
       charsExtracted: data.chars_extracted ?? 0,
+      fallbackExtraction: data.fallback_extraction ?? false,
       totals,
     });
   } catch (e) {
