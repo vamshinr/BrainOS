@@ -2096,7 +2096,7 @@ class QueryRequest(BaseModel):
 
 class IngestRequest(BaseModel):
     kind: str
-    title: str
+    title: Optional[str] = None
     content: str
     url: Optional[str] = None
     model: Optional[str] = None  # per-request override for the extraction call
@@ -2150,10 +2150,11 @@ def health_check():
 @app.post("/api/ingest")
 def ingest_text(req: IngestRequest):
     request_t0 = time.time()
+    title = req.title or (req.content.strip().splitlines()[0][:80] if req.content.strip() else f"Untitled {req.kind}")
     _debug_event(
         "ingest.text.start",
         "Received text ingestion request",
-        title=req.title,
+        title=title,
         kind=req.kind,
         url=req.url,
         model=req.model,
@@ -2168,13 +2169,13 @@ def ingest_text(req: IngestRequest):
     )
 
     extraction = ingest_agent.extract_from_text(
-        req.kind, req.title, req.content, model_override=req.model,
+        req.kind, title, req.content, model_override=req.model,
     )
 
     source = {
         "id": source_id,
         "kind": req.kind,
-        "title": req.title,
+        "title": title,
         "content": req.content,
         "url": req.url,
         "capturedAt": now,
@@ -2342,7 +2343,7 @@ def _extract_file_text(filename: str, data: bytes) -> str:
 
 @app.post("/api/ingest_file")
 async def ingest_file(
-    title: str = Form(...),
+    title: Optional[str] = Form(None),
     kind: str = Form("doc"),
     url: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
@@ -2353,6 +2354,10 @@ async def ingest_file(
       PDF/DOC/DOCX/TXT/MD/CSV → text extraction → 70B extraction → ChromaDB → brain.json
     """
     request_t0 = time.time()
+    data = await file.read()
+    filename = file.filename or "upload"
+    if not title:
+        title = filename.rsplit(".", 1)[0] or filename
     _debug_event(
         "ingest.file.start",
         "Received file ingestion request",
@@ -2363,8 +2368,6 @@ async def ingest_file(
         filename=file.filename,
         content_type=file.content_type,
     )
-    data = await file.read()
-    filename = file.filename or "upload"
     _debug_event(
         "ingest.file.read",
         "Uploaded file bytes read",
@@ -2491,7 +2494,7 @@ async def ingest_file(
 
 @app.post("/api/ingest_image")
 async def ingest_image(
-    title: str = Form(...),
+    title: Optional[str] = Form(None),
     kind: str = Form("doc"),
     url: Optional[str] = Form(None),
     model: Optional[str] = Form(None),  # used as VLM model override
@@ -2503,6 +2506,11 @@ async def ingest_image(
       image → VLM description → 70B extraction → ChromaDB embedding → brain.json
     """
     request_t0 = time.time()
+    image_data = await file.read()
+    mime = file.content_type or "image/png"
+    if not title:
+        fname = file.filename or "image"
+        title = fname.rsplit(".", 1)[0] or fname
     _debug_event(
         "ingest.image.start",
         "Received image ingestion request",
@@ -2514,8 +2522,6 @@ async def ingest_image(
         filename=file.filename,
         content_type=file.content_type,
     )
-    image_data = await file.read()
-    mime = file.content_type or "image/png"
     _debug_event(
         "ingest.image.read",
         "Uploaded image bytes read",
