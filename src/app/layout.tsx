@@ -26,6 +26,7 @@ const NAV: { href: string; label: string; hint: string }[] = [
   { href: "/graph", label: "Map", hint: "Entities & links" },
   { href: "/ask", label: "Ask", hint: "Query the brain" },
   { href: "/skills", label: "Skills", hint: "Export for agents" },
+  { href: "/slack", label: "Slack", hint: "MCP integration" },
   { href: "/metrics", label: "GPU", hint: "AMD MI300X live stats" },
 ];
 

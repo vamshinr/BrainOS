@@ -2884,6 +2884,21 @@ def _is_sensitive(query: str) -> str | None:
     return None
 
 
+from integrations.slack_routes import create_slack_router
+
+app.include_router(create_slack_router(
+    ingest_agent=ingest_agent,
+    struct_agent=struct_agent,
+    exec_agent=exec_agent,
+    feedback_agent=feedback_agent,
+    chunk_text=_chunk_text,
+    max_extraction_chars=_MAX_EXTRACTION_CHARS,
+    utc_now_iso=_utc_now_iso,
+    debug_event=_debug_event,
+    is_sensitive=_is_sensitive,
+))
+
+
 @app.get("/api/skills_export")
 def skills_export(token: str = ""):
     """Return brain state for SKILLS.md generation. Gated by EXPORT_TOKEN if set."""

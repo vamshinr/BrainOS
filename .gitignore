@@ -240,6 +240,7 @@ data/chroma_db/
 # macOS
 .DS_Store
 **/.DS_Store
+data/slack/*.json
 
 # AI Agent Settings
 .claude/
