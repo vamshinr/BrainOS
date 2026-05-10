@@ -85,7 +85,7 @@ export default function IngestPage() {
     try {
       const fd = new FormData();
       fd.append("file", uploadFile, uploadFile.name);
-      fd.append("title", fileTitle);
+      if (fileTitle) fd.append("title", fileTitle);
       fd.append("kind", fileKind);
       if (fileUrl) fd.append("url", fileUrl);
       if (textModel) fd.append("model", textModel);
@@ -116,7 +116,8 @@ export default function IngestPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          kind, title, content,
+          kind, content,
+          title: title || undefined,
           url: url || undefined,
           model: textModel || undefined,
         }),
@@ -144,7 +145,7 @@ export default function IngestPage() {
     try {
       const fd = new FormData();
       fd.append("file", imgFile, imgFile.name);
-      fd.append("title", imgTitle);
+      if (imgTitle) fd.append("title", imgTitle);
       fd.append("kind", imgKind);
       if (imgUrl) fd.append("url", imgUrl);
       if (vlmModel) fd.append("model", vlmModel);
@@ -217,11 +218,10 @@ export default function IngestPage() {
                 ))}
               </select>
             </Field>
-            <Field label="Title">
+            <Field label="Title (optional)">
               <input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                required
                 placeholder="e.g. #eng-billing — Stripe migration kickoff"
                 className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm"
               />
@@ -256,7 +256,7 @@ export default function IngestPage() {
             hint="overrides extraction agent"
           />
 
-          <SubmitRow loading={loading} disabled={!title || !content} label="Extract knowledge" />
+          <SubmitRow loading={loading} disabled={!content} label="Extract knowledge" />
         </form>
       )}
 
@@ -280,11 +280,10 @@ export default function IngestPage() {
                 ))}
               </select>
             </Field>
-            <Field label="Title">
+            <Field label="Title (optional)">
               <input
                 value={fileTitle}
                 onChange={(e) => setFileTitle(e.target.value)}
-                required
                 placeholder="e.g. Engineering handbook Q2 2026"
                 className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm"
               />
@@ -325,7 +324,7 @@ export default function IngestPage() {
             hint="overrides extraction agent"
           />
 
-          <SubmitRow loading={loading} disabled={!fileTitle || !uploadFile} label="Extract knowledge" />
+          <SubmitRow loading={loading} disabled={!uploadFile} label="Extract knowledge" />
         </form>
       )}
 
@@ -350,11 +349,10 @@ export default function IngestPage() {
                 ))}
               </select>
             </Field>
-            <Field label="Title">
+            <Field label="Title (optional)">
               <input
                 value={imgTitle}
                 onChange={(e) => setImgTitle(e.target.value)}
-                required
                 placeholder="e.g. System architecture diagram Q2 2026"
                 className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm"
               />
@@ -409,7 +407,7 @@ export default function IngestPage() {
             />
           </div>
 
-          <SubmitRow loading={loading} disabled={!imgTitle || !imgFile} label="Ingest via VLM" />
+          <SubmitRow loading={loading} disabled={!imgFile} label="Ingest via VLM" />
         </form>
       )}
 

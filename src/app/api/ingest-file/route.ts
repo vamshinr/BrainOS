@@ -30,8 +30,8 @@ export async function POST(req: Request) {
     const url = formData.get("url") as string | null;
     const model = formData.get("model") as string | null;
 
-    if (!file || !title) {
-      return NextResponse.json({ error: "file and title are required" }, { status: 400 });
+    if (!file) {
+      return NextResponse.json({ error: "file is required" }, { status: 400 });
     }
 
     const ext = file.name.match(ALLOWED_EXTS);
@@ -44,7 +44,7 @@ export async function POST(req: Request) {
 
     const backendFormData = new FormData();
     backendFormData.append("file", file, file.name);
-    backendFormData.append("title", title);
+    if (title) backendFormData.append("title", title);
     backendFormData.append("kind", kind);
     if (url) backendFormData.append("url", url);
     if (model) backendFormData.append("model", model);

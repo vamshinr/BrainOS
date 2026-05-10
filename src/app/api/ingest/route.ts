@@ -7,7 +7,7 @@ export const maxDuration = 300;
 
 const Body = z.object({
   kind: z.enum(["slack", "email", "ticket", "doc", "meeting", "wiki", "code", "other"]),
-  title: z.string().min(1),
+  title: z.string().min(1).optional(),
   content: z.string().min(1),
   url: z.string().url().optional(),
   model: z.string().optional(),
