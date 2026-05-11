@@ -103,15 +103,148 @@ class VLLMClient:
         self.models = _Models(self._http)
 
 
-# ── LLM clients (vLLM HTTP, pointed at AMD MI300X) ─────────────────────────────
-vllm_url = os.getenv("VLLM_API_BASE", "http://134.199.204.211:8000/v1")
-vlm_url = os.getenv("VLM_API_BASE", vllm_url)
+# ── Claude API fallback client (used when vLLM endpoints are absent/unreachable) ─
+# Uses httpx directly against Anthropic's Messages API, translating to/from
+# OpenAI-compatible SimpleNamespace responses so the rest of the code is unchanged.
 
-llm_client = VLLMClient(base_url=vllm_url)
-vlm_client = VLLMClient(base_url=vlm_url)
+def _openai_messages_to_anthropic(messages: list) -> tuple[str | None, list]:
+    """Split system prompt out and convert image_url blocks to Anthropic format."""
+    system = None
+    converted = []
+    for m in messages:
+        role = m.get("role", "user")
+        if role == "system":
+            system = m.get("content", "")
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            converted.append({"role": role, "content": content})
+        elif isinstance(content, list):
+            blocks = []
+            for block in content:
+                if block.get("type") == "text":
+                    blocks.append({"type": "text", "text": block["text"]})
+                elif block.get("type") == "image_url":
+                    url = block["image_url"]["url"]
+                    if url.startswith("data:"):
+                        header, b64data = url.split(",", 1)
+                        media_type = header.split(";")[0].split(":")[1]
+                        blocks.append({
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": media_type, "data": b64data},
+                        })
+                    else:
+                        blocks.append({
+                            "type": "image",
+                            "source": {"type": "url", "url": url},
+                        })
+            converted.append({"role": role, "content": blocks})
+        else:
+            converted.append({"role": role, "content": str(content)})
+    return system, converted
 
 
-def _resolve_model(client: VLLMClient, env_name: str, env_value: str) -> str:
+class _ClaudeChatCompletions:
+    def __init__(self, http: httpx.Client):
+        self._http = http
+
+    def create(self, *, model, messages, max_tokens=None, temperature=None, **kwargs):
+        system, converted = _openai_messages_to_anthropic(messages)
+        payload: dict = {"model": model, "messages": converted, "max_tokens": max_tokens or 4096}
+        if system:
+            payload["system"] = system
+        if temperature is not None:
+            payload["temperature"] = temperature
+        r = self._http.post("/messages", json=payload)
+        r.raise_for_status()
+        data = r.json()
+        # Translate Anthropic response → OpenAI-style SimpleNamespace
+        text = data["content"][0]["text"] if data.get("content") else ""
+        usage = data.get("usage", {})
+        return _to_obj({
+            "choices": [{"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": usage.get("input_tokens"),
+                "completion_tokens": usage.get("output_tokens"),
+            },
+            "model": model,
+        })
+
+
+class _ClaudeChat:
+    def __init__(self, http: httpx.Client):
+        self.completions = _ClaudeChatCompletions(http)
+
+
+class _ClaudeModels:
+    def __init__(self, model: str):
+        self._model = model
+
+    def list(self):
+        return _to_obj({"data": [{"id": self._model}]})
+
+
+class ClaudeAPIClient:
+    """Drop-in replacement for VLLMClient backed by Anthropic Messages API via httpx."""
+
+    def __init__(self, api_key: str, model: str = "claude-sonnet-4-6"):
+        http = httpx.Client(
+            base_url="https://api.anthropic.com/v1",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            timeout=600.0,
+        )
+        self.base_url = "https://api.anthropic.com/v1"
+        self._model = model
+        self.chat = _ClaudeChat(http)
+        self.models = _ClaudeModels(model)
+        self.embeddings = None  # Anthropic has no embeddings; sentence-transformers handles this
+
+
+def _probe_endpoint(url: str, timeout: float = 5.0) -> bool:
+    """Return True if the endpoint responds to GET /models within timeout."""
+    try:
+        r = httpx.get(f"{url.rstrip('/')}/models", timeout=timeout)
+        return r.status_code < 500
+    except Exception:
+        return False
+
+
+# ── LLM client selection: vLLM → Claude API fallback ──────────────────────────
+_raw_vllm_url = os.getenv("VLLM_API_BASE", "").strip()
+_raw_vlm_url  = os.getenv("VLM_API_BASE", "").strip()
+_claude_key   = os.getenv("CLAUDE_API_KEY", "").strip()
+_claude_model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+_USING_CLAUDE_FALLBACK = False
+
+_vllm_available = bool(_raw_vllm_url) and _probe_endpoint(_raw_vllm_url)
+
+if _vllm_available:
+    vllm_url = _raw_vllm_url
+    vlm_url  = _raw_vlm_url if _raw_vlm_url else vllm_url
+    llm_client = VLLMClient(base_url=vllm_url)
+    vlm_client = VLLMClient(base_url=vlm_url)
+    print(f"[BrainOS] Using vLLM endpoint: {vllm_url}")
+elif _claude_key:
+    _USING_CLAUDE_FALLBACK = True
+    vllm_url = "https://api.anthropic.com/v1"
+    vlm_url  = vllm_url
+    llm_client = ClaudeAPIClient(api_key=_claude_key, model=_claude_model)
+    vlm_client = ClaudeAPIClient(api_key=_claude_key, model=_claude_model)
+    print(f"[BrainOS] vLLM unavailable — using Claude API fallback ({_claude_model})")
+else:
+    # Last resort: still construct a VLLMClient so the server starts; calls will fail at request time
+    vllm_url = _raw_vllm_url or "http://localhost:8000/v1"
+    vlm_url  = _raw_vlm_url or vllm_url
+    llm_client = VLLMClient(base_url=vllm_url)
+    vlm_client = VLLMClient(base_url=vlm_url)
+    print(f"[BrainOS] WARNING: no reachable LLM endpoint and no CLAUDE_API_KEY — ingestion/ask will fail")
+
+
+def _resolve_model(client, env_name: str, env_value: str) -> str:
     """
     Verify the configured model name exists on the vLLM endpoint.
     If not, auto-select the first available model and warn.
@@ -173,26 +306,29 @@ class ModelRouter:
     """Resolve (client, model) per task with per-task env overrides."""
 
     def __init__(self):
-        self._client_cache: dict[str, VLLMClient] = {
+        self._client_cache: dict[str, object] = {
             vllm_url: llm_client,
             vlm_url: vlm_client,
         }
-        self._routes: dict[str, tuple[VLLMClient, str]] = {}
+        self._routes: dict[str, tuple] = {}
         for task in TASKS:
             self._routes[task] = self._resolve(task)
 
-    def _resolve(self, task: str) -> tuple[VLLMClient, str]:
+    def _resolve(self, task: str) -> tuple:
         tu = task.upper()
         # VLM has historic env var names
         if task == "vlm":
             return vlm_client, VLM_MODEL_NAME
+        # In Claude fallback mode, ignore per-task API_BASE overrides
+        if _USING_CLAUDE_FALLBACK:
+            return llm_client, MODEL_NAME
         api_base = os.getenv(f"{tu}_API_BASE", "").strip() or vllm_url
         model = os.getenv(f"{tu}_MODEL", "").strip() or MODEL_NAME
         if api_base not in self._client_cache:
             self._client_cache[api_base] = VLLMClient(base_url=api_base)
         return self._client_cache[api_base], model
 
-    def get(self, task: str) -> tuple[VLLMClient, str]:
+    def get(self, task: str) -> tuple:
         return self._routes.get(task, (llm_client, MODEL_NAME))
 
     def describe(self) -> list[dict]:
@@ -339,10 +475,11 @@ def _log_call(
         })
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
+# BRAIN_DATA_DIR env var lets Docker/Railway point to a persistent volume.
 _project_root = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..")
 )
-DATA_DIR = os.path.join(_project_root, "data")
+DATA_DIR = os.environ.get("BRAIN_DATA_DIR") or os.path.join(_project_root, "data")
 CHROMA_PATH = os.path.join(DATA_DIR, "chroma_db")
 BRAIN_JSON = os.path.join(DATA_DIR, "brain.json")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -3264,4 +3401,5 @@ def clear_all():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8081, reload=False)
+    port = int(os.environ.get("PORT", 8081))
+    uvicorn.run(app, host="0.0.0.0", port=port, reload=False)

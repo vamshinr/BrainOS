@@ -49,7 +49,7 @@ export async function POST(req: Request) {
     if (url) backendFormData.append("url", url);
     if (model) backendFormData.append("model", model);
 
-    const backendRes = await fetch("http://localhost:8081/api/ingest_file", {
+    const backendRes = await fetch(`${BACKEND_URL}/api/ingest_file", {
       method: "POST",
       body: backendFormData,
     });

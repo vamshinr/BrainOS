@@ -22,7 +22,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const backendRes = await fetch("http://localhost:8081/api/ingest", {
+    const backendRes = await fetch(`${BACKEND_URL}/api/ingest", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

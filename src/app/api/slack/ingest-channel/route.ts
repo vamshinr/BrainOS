@@ -22,7 +22,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const backendRes = await fetch("http://localhost:8081/api/slack/ingest_channel", {
+    const backendRes = await fetch(`${BACKEND_URL}/api/slack/ingest_channel", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

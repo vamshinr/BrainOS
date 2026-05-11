@@ -4,7 +4,7 @@ export const runtime = "nodejs";
 
 export async function GET() {
   try {
-    const res = await fetch("http://localhost:8081/api/metrics", {
+    const res = await fetch(`${BACKEND_URL}/api/metrics", {
       next: { revalidate: 0 },
     });
     if (!res.ok) throw new Error(`Backend ${res.status}`);

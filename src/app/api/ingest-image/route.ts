@@ -33,7 +33,7 @@ export async function POST(req: Request) {
     if (model) backendFormData.append("model", model);
     if (textModel) backendFormData.append("text_model", textModel);
 
-    const backendRes = await fetch("http://localhost:8081/api/ingest_image", {
+    const backendRes = await fetch(`${BACKEND_URL}/api/ingest_image", {
       method: "POST",
       body: backendFormData,
     });

@@ -1,3 +1,4 @@
+import { BACKEND_URL } from "@/lib/backend";
 import { unstable_cache } from "next/cache";
 import { revalidatePath } from "next/cache";
 import type { UnitKind, EntityKind, Department, TemporalStatus } from "./types";
@@ -69,7 +70,7 @@ export interface State {
 }
 
 const CACHE_TAG = "brain-state";
-const BACKEND = "http://localhost:8081";
+const BACKEND = BACKEND_URL;
 
 async function fetchState(): Promise<State> {
   try {
