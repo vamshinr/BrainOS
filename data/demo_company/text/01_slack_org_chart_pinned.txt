@@ -1,0 +1,38 @@
+#general · pinned by Diego Marin (Founder/CEO) · 2026-04-28
+
+Welcome / Helix Outdoor Org Chart — Updated April 28, 2026
+
+EXEC TEAM
+- Founder / CEO: Diego Marin (diego@helixoutdoor.com)
+- CTO: Sai Krishnan (sai@helixoutdoor.com)
+- Head of Finance: Bruno Castelli (bruno@helixoutdoor.com)
+- VP of Operations: [VACANT — Maya Lin departed April 12, 2026]
+- Head of Customer Care: Camille Rousseau (camille@helixoutdoor.com)
+- Head of Marketing: Lena Park (lena@helixoutdoor.com)
+- General Counsel: Priya Iyer (priya@helixoutdoor.com) — fractional, 2 days/week
+
+OPERATIONS (reports to CEO temporarily until VP Ops is hired)
+- Acting Ops Lead: Marco Ferraro (marco@helixoutdoor.com) — covers factory + 3PL
+- Logistics Coordinator: Nia Okafor (nia@helixoutdoor.com) — customs + Prime Forwarders
+- Inventory Planner: Hugo Sanchez (hugo@helixoutdoor.com)
+
+ENGINEERING (reports to Sai Krishnan)
+- Senior Backend: Jin Ahn (jin@helixoutdoor.com) — owns shopify-svc + erp-bridge
+- Senior Frontend: Hira Qureshi (hira@helixoutdoor.com)
+- ML / Data: Wei Zhao (wei@helixoutdoor.com)
+- DevOps: Tomas Becker (tomas@helixoutdoor.com)
+
+CUSTOMER CARE (reports to Camille Rousseau)
+- CX Lead - DTC: Aria Velasquez (aria@helixoutdoor.com)
+- CX Lead - B2B / Wholesale: Cara Bennett (cara@helixoutdoor.com)
+- CX Specialists: Petra Olsson, Idris Khan
+
+FINANCE (reports to Bruno Castelli)
+- AP / AR: Liam Walsh (liam@helixoutdoor.com)
+- Controller: Renata Costa (renata@helixoutdoor.com) — fractional
+
+IMPORTANT — interim coverage while VP Ops is open:
+- New factory or 3PL onboarding: PAUSED until VP Ops is hired (target: June 30, 2026)
+- Existing factory escalations route to Marco Ferraro
+- Existing 3PL (ShipBob) escalations route to Nia Okafor
+- Any vendor contract over $50,000/year requires Diego + Bruno co-sign until VP Ops fills

@@ -1,0 +1,21 @@
+#ops-leads · Marco Ferraro · 2026-05-05
+
+PSA on Saigon TexCo lead times — the MSA says 21 days but that hasn't been true since February.
+
+Talked to Mr. Tran today. Two factors stretched our actual lead time to ~35 days:
+
+1. Tet holiday spillover. They closed Feb 8-15 and the production schedule is still running 8-10 days behind because they consolidated three customers into one production line in March to recover.
+2. They're now sharing capacity with a Patagonia-spinoff brand that has priority on cotton-blend SKUs. Our nylon SKUs (Trailspire, Crestcamp) are unaffected. But anything cotton (Basecamp tee, the new Foothill hoodie) is back-of-line.
+
+EFFECTIVE PLANNING ASSUMPTION (until further notice):
+- Nylon products (Trailspire 40L, Crestcamp 60L, Ridgeline pack series): 28-day lead time
+- Cotton products (Basecamp tee, Foothill hoodie): 42-day lead time
+- Custom / embroidered: add 7 days on top
+
+This OVERRIDES the 21-day blanket lead time in the MSA we signed in 2024. Mr. Tran said they'll formally update the MSA at our renewal in November. For now this is a verbal agreement.
+
+Hugo — please update the inventory planner spreadsheet. We should not be writing POs assuming 21 days right now or we'll keep hitting stock-outs.
+
+Camille — for any "when will my pre-order ship" questions, use the new lead times above. The website still says "ships within 3 weeks of order" which is now wrong. Lena — can your team update the product pages? It's misleading customers.
+
+— Marco

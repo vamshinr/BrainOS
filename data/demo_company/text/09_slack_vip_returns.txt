@@ -1,0 +1,18 @@
+#cs-ops · Camille Rousseau · 2026-05-01
+
+Quick update on our VIP return window — this came up in the marketing meeting yesterday.
+
+For the Helix Trail Club members (our VIP loyalty tier — 5+ orders in a rolling 12-month window, currently ~1,400 customers), Lena's team committed in the launch email last quarter to a "60-day no-questions return window."
+
+That's longer than our standard 30-day policy. I want to make sure we honor it consistently. So:
+
+- Helix Trail Club members: 60-day return window on physical products. Confirm membership by checking the Klaviyo "VIP" tag OR by looking at order count in Shopify.
+- All other customers: standard 30-day window per the v2.1 returns doc.
+
+This is in ADDITION to (not in conflict with) the EU 14-day digital rule and the standard 30-day policy. So a German Helix Trail Club member buying a physical jacket gets the 60-day window (longer = better for the customer). A German non-VIP buying a digital subscription gets the 14-day rule. A US non-VIP buying a physical bag gets the 30-day rule. Etc.
+
+For the Lot 24-A-118 zipper situation, the lot defect supersedes everything else — we eat the return at any age.
+
+If you're ever unsure which window applies, default to giving the customer the LONGEST one and we'll figure it out internally.
+
+— Camille

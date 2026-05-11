@@ -1,0 +1,38 @@
+From: Bruno Castelli <bruno@helixoutdoor.com>
+To: Camille Rousseau <camille@helixoutdoor.com>; Aria Velasquez <aria@helixoutdoor.com>; Cara Bennett <cara@helixoutdoor.com>
+CC: Diego Marin <diego@helixoutdoor.com>
+Subject: Refund authority limits — UPDATED, effective May 1, 2026
+Date: 2026-04-28 11:05
+
+Team —
+
+Following our Q1 close review and a couple of refunds last quarter that I think we shouldn't have approved at the level we did, here are the new refund authority limits effective May 1.
+
+OLD LIMITS (in effect through April 30, 2026):
+- CX Specialist (Petra, Idris): up to $300 without approval
+- CX Lead (Aria, Cara): up to $2,000 without approval
+- Camille: up to $10,000 without approval
+- Bruno (me): up to $50,000
+
+NEW LIMITS (effective May 1, 2026):
+- CX Specialist: up to $150 without approval
+- CX Lead (Aria, Cara): up to $1,000 without approval
+- Camille: up to $5,000 without approval
+- Bruno: up to $50,000
+- Above $50,000: requires Bruno + Diego co-approval
+
+This applies to:
+- Refunds (full or partial)
+- Store credit issuances
+- Goodwill discount codes valued >$50
+
+This does NOT apply to:
+- Lot 24-A-118 zipper defect refunds (Cara's blanket approval per Diego, no limit)
+- Camp Cosmos / TrekRight wholesale credits (those go through me directly regardless of size)
+- EU 14-day digital product withdrawals (auto-approved per Priya's email)
+
+Liam will update the Stripe role permissions accordingly. If you can't process a refund you used to be able to, that's why — escalate up the chain.
+
+A reminder: please always log refunds in Gorgias with the original order ID in the ticket title. We're going to start auditing these monthly.
+
+— Bruno

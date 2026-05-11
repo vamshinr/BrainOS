@@ -1,0 +1,33 @@
+From: Priya Iyer <priya@helixoutdoor.com>
+To: Camille Rousseau <camille@helixoutdoor.com>; CX Team <cx@helixoutdoor.com>
+CC: Diego Marin <diego@helixoutdoor.com>
+Subject: EU Returns — supersedes the 30-day rule for digital subscription products
+Date: 2026-04-30 14:18
+
+Camille, team —
+
+Quick legal note that needs to be reflected in the returns policy.
+
+Under EU Directive 2011/83/EU (Consumer Rights), customers in any EU member state have an automatic 14-day "withdrawal period" for digital products purchased online. They do not need to provide a reason and we cannot require one.
+
+This applies to:
+- Our Trail Box subscription (digital newsletter + planning tool component)
+- Any future digital-only SKU we add (route-finder app, etc.)
+
+This does NOT apply to:
+- Physical product returns from the EU — those still follow our standard 30-day policy in the v2.1 returns document
+- Custom embroidered orders (those are exempt under Article 16(c))
+- Any product where the seal has been broken on a hygiene item (Article 16(e))
+
+Effective immediately:
+- EU customers identified by Stripe billing country requesting refund within 14 days of purchase on the Trail Box subscription → automatic full refund, no approval needed.
+- Beyond 14 days → revert to whatever the standard policy says.
+
+This SUPERSEDES section 4.2 of the Returns Policy v2.1 (which says all subscriptions are non-refundable after 7 days). The 7-day rule remains correct for non-EU customers on subscriptions.
+
+I'm working with Camille to publish a v2.2 of the returns doc that has both rules side by side. In the meantime — please follow this email.
+
+If anyone is unsure whether a customer counts as "EU," check the billing country in Stripe (NOT the shipping address — billing is what matters for consumer rights jurisdiction).
+
+— Priya
+General Counsel, Helix Outdoor (fractional)

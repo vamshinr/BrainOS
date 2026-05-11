@@ -1,0 +1,11 @@
+#general · Tomas Becker · 2026-05-04
+
+Random q for whoever knows — who's the contact for our AMD Developer Cloud billing? We had a credit reconciliation issue last month that Bruno flagged but I'm not sure if it routes through our usual cloud-billing process or AMD has a separate account manager.
+
+Also: are we enrolled in the AMD AI Developer Program? Wei says we need to be enrolled to claim the hackathon credits but I can't find any confirmation email in my inbox or in the shared "vendor accounts" Notion page. If we're not enrolled we should probably do that this week.
+
+cc @Sai @Bruno
+
+— Tomas
+
+(this is a real gap — there's no documented owner for AMD vendor relationship in any policy file)

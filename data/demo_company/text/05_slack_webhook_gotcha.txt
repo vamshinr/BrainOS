@@ -1,0 +1,19 @@
+#engineering · Jin Ahn · 2026-05-02
+
+OK so I finally figured out why we were missing inventory updates from ShipBob in Odoo. This has been bothering me for two weeks.
+
+ShipBob sends an inventory webhook to our /api/v2/shipbob/inventory endpoint every time a SKU count changes. The webhook is signed with HMAC-SHA256 in the X-Shipbob-Signature header.
+
+THE BUG: if ShipBob sends a webhook with NO signature header at all (which they do during their nightly maintenance window — confirmed with Devon at ShipBob), our handler silently returns 200 OK and drops the event. We never log it. We never retry. The inventory just... drifts.
+
+We were missing 4-7 SKU updates per week. That's why our Odoo numbers were off and Cara has been getting overstock alerts on items that actually had zero on hand.
+
+THE FIX (already deployed): if the X-Shipbob-Signature header is missing, we now reject with 400 AND log a CRITICAL alert to PagerDuty. Tomas already updated the runbook.
+
+CRITICAL GOTCHA FOR ANYONE TOUCHING THIS ENDPOINT:
+- The endpoint is /api/v2/shipbob/inventory (not /api/v1/inventory — that's the deprecated DTC channel one).
+- ShipBob's "nightly maintenance" is between 2-4am UTC on Tuesdays. They sometimes drop the signature during that window. Treat as a real event, not a test.
+- DO NOT add a try/except around the signature verification. We had that originally. That's how the bug got introduced.
+- We also have a separate /api/v2/odoo/inventory endpoint that pushes from Odoo TO ShipBob. Different signing scheme (Odoo uses a static API key in X-Odoo-Token). Don't confuse them.
+
+Two-engineer review required for any changes to either webhook handler going forward — Sai signed off on this rule today.

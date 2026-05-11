@@ -1,0 +1,30 @@
+#ops-leads · Diego Marin · 2026-04-15
+
+Hey ops leads — quick recap from yesterday's all-hands so it's written down somewhere.
+
+Maya Lin left us on April 12. She was VP Ops for 2.5 years and basically ran our supplier relationships single-handed. Until we hire her replacement (target start: June 30), here's the coverage plan:
+
+1. SAIGON TEXCO (primary factory, ~70% of finished goods)
+   - Day-to-day: Marco Ferraro picks up. He's been on every QC trip with Maya since 2024.
+   - Pricing / contract: Bruno Castelli (Finance) co-signs anything new with me.
+   - Their account manager is Mr. Tran Hai (hai.tran@saigontexco.vn). Already introduced to Marco.
+
+2. BANDUNG CRAFTED (secondary factory, ~30%, mostly the lighter-weight summer line)
+   - Marco also picks this up. Their contact: Ibu Sari Wijaya (sari@bandungcrafted.co.id).
+   - We have NO contract on file for them — Maya was on a verbal agreement. Priya is drafting one. Until then, treat all PO terms as Net-30 / FOB Jakarta.
+
+3. SHIPBOB (3PL)
+   - Day-to-day: Nia Okafor, no change.
+   - Account manager: Devon Riley at ShipBob.
+
+4. NEW FACTORY ONBOARDING — PAUSED.
+   - We had three suppliers in eval (one in Pakistan, two in Mexico). Pausing all of them until VP Ops is hired.
+   - Hugo, please don't take any new sample fees. If they push, just say "Q3 review."
+
+5. INSURANCE / TRADE FINANCE
+   - Maya owned the Marsh trade-credit policy renewal. Renews Sep 1.
+   - Priya is going to take it over for now since it's a contract.
+
+If anyone asks me "who do I escalate to" for ops issues right now, the answer is Marco for factory stuff, Nia for 3PL/customs, Bruno for anything that costs money, and me for anything else.
+
+— Diego

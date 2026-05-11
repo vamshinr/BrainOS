@@ -1,0 +1,22 @@
+#cs-ops · Cara Bennett · 2026-05-04
+
+🚨 Heads up team — we have a defective lot situation.
+
+I just took the third return this week on the Trailspire 40L pack with the same issue: the main compartment YKK zipper splits open under load. All three returns are from Lot 24-A-118 (printed on the inner tag, faded pink ink — easy to miss).
+
+I called Marco. He confirmed Saigon TexCo had a sub-supplier change for the zipper coil on that lot (they used Wenzhou Zipper instead of YKK Vietnam — without telling us). Marco is going to push back on Mr. Tran tomorrow and we'll likely demand a credit.
+
+UNTIL FURTHER NOTICE:
+1. DO NOT restock any returns of Trailspire 40L from Lot 24-A-118. Mark them as DEFECTIVE in Odoo.
+2. Any customer who reports zipper failure on Trailspire 40L → automatic full refund + 20% discount code (HELIXTRUST20) for next purchase, no questions, no return required. Just photo of the lot tag.
+3. ShipBob has been told to quarantine any 24-A-118 inventory in their warehouse. Nia is on it.
+4. We have ~840 units of 24-A-118 in ShipBob right now. Marco is on a call with Tran about replacement units this week.
+5. If Camp Cosmos or TrekRight (our wholesale accounts) call about this — escalate to me IMMEDIATELY. I have the numbers ready and we want to handle proactively, not reactively.
+
+This is not a recall yet. Marco said let's wait until we see the Saigon TexCo response. But internally, treat it as one.
+
+Lot tag location reminder: inside the main compartment, sewn into the seam, near the bottom-left water bottle pocket.
+
+Thanks team. Sorry for the chaos.
+
+— Cara
