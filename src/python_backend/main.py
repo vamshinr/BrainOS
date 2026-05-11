@@ -521,10 +521,10 @@ if _embed_api_base:
     )
     EMBEDDING_BACKEND = f"GPU · vLLM · {_embed_model}"
 else:
-    embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=_embed_model
-    )
-    EMBEDDING_BACKEND = f"CPU · sentence-transformers · {_embed_model}"
+    # Use ChromaDB's built-in ONNX embedding (all-MiniLM-L6-v2 via onnxruntime).
+    # No torch dependency — keeps the Docker image lean for cloud deployment.
+    embedding_fn = embedding_functions.DefaultEmbeddingFunction()
+    EMBEDDING_BACKEND = f"CPU · ONNX · all-MiniLM-L6-v2 (chromadb default)"
 
 print(f"[BrainOS] Embedding backend: {EMBEDDING_BACKEND}")
 
