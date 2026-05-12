@@ -1,3 +1,7 @@
+# TLS certs (self-signed or Let's Encrypt) — never commit private keys
+certs/
+letsencrypt/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

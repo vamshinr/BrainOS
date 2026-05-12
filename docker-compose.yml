@@ -39,11 +39,29 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+      - "443:443"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs
+      - certbot_webroot:/var/www/certbot
+    # On first boot, auto-generate a self-signed cert if ./certs is empty —
+    # so HTTPS works immediately on the raw IP. Replace with a real
+    # Let's Encrypt cert by running deploy/gcp/init-tls.sh once you point a
+    # domain at this VM.
+    command: >
+      sh -c "if [ ! -s /etc/nginx/certs/fullchain.pem ]; then
+        apk add --no-cache openssl >/dev/null &&
+        openssl req -x509 -nodes -newkey rsa:2048 -days 365
+          -keyout /etc/nginx/certs/privkey.pem
+          -out /etc/nginx/certs/fullchain.pem
+          -subj '/CN=brainos.local' &&
+        chmod 600 /etc/nginx/certs/privkey.pem;
+      fi &&
+      nginx -g 'daemon off;'"
     depends_on:
       - frontend
       - backend
 
 volumes:
   brain_data:
+  certbot_webroot:

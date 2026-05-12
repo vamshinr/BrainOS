@@ -213,35 +213,58 @@ def _probe_endpoint(url: str, timeout: float = 5.0) -> bool:
         return False
 
 
-# ── LLM client selection: vLLM → Claude API fallback ──────────────────────────
-_raw_vllm_url = os.getenv("VLLM_API_BASE", "").strip()
-_raw_vlm_url  = os.getenv("VLM_API_BASE", "").strip()
+# ── LLM provider selection ────────────────────────────────────────────────────
+# BrainOS supports two providers, controlled by LLM_PROVIDER:
+#
+#   LLM_PROVIDER=claude   →  Anthropic Claude API (requires CLAUDE_API_KEY)
+#   LLM_PROVIDER=custom   →  any OpenAI-compatible endpoint, e.g. self-hosted
+#                            vLLM on a GPU. Requires LLM_API_BASE (or its legacy
+#                            alias VLLM_API_BASE) and LLM_MODEL_NAME.
+#
+# If LLM_PROVIDER is unset, we auto-detect: prefer a reachable custom endpoint,
+# otherwise fall back to Claude if a key is present.
+_provider_env = os.getenv("LLM_PROVIDER", "").strip().lower()
+
+# Custom-endpoint env vars (LLM_* is the canonical name; VLLM_*/VLM_* are kept
+# as backwards-compatible aliases).
+_raw_llm_url = (os.getenv("LLM_API_BASE") or os.getenv("VLLM_API_BASE") or "").strip()
+_raw_vlm_url = (os.getenv("VLM_API_BASE") or "").strip()
+
+# Claude env vars.
 _claude_key   = os.getenv("CLAUDE_API_KEY", "").strip()
 _claude_model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+
 _USING_CLAUDE_FALLBACK = False
 
-_vllm_available = bool(_raw_vllm_url) and _probe_endpoint(_raw_vllm_url)
+def _choose_provider() -> str:
+    if _provider_env in ("claude", "custom"):
+        return _provider_env
+    # Auto-detect: prefer a reachable custom endpoint, else Claude.
+    if _raw_llm_url and _probe_endpoint(_raw_llm_url):
+        return "custom"
+    if _claude_key:
+        return "claude"
+    return "custom"  # last resort — server starts but calls will fail
 
-if _vllm_available:
-    vllm_url = _raw_vllm_url
-    vlm_url  = _raw_vlm_url if _raw_vlm_url else vllm_url
-    llm_client = VLLMClient(base_url=vllm_url)
-    vlm_client = VLLMClient(base_url=vlm_url)
-    print(f"[BrainOS] Using vLLM endpoint: {vllm_url}")
-elif _claude_key:
-    _USING_CLAUDE_FALLBACK = True
-    vllm_url = "https://api.anthropic.com/v1"
-    vlm_url  = vllm_url
-    llm_client = ClaudeAPIClient(api_key=_claude_key, model=_claude_model)
-    vlm_client = ClaudeAPIClient(api_key=_claude_key, model=_claude_model)
-    print(f"[BrainOS] vLLM unavailable — using Claude API fallback ({_claude_model})")
-else:
-    # Last resort: still construct a VLLMClient so the server starts; calls will fail at request time
-    vllm_url = _raw_vllm_url or "http://localhost:8000/v1"
+_provider = _choose_provider()
+
+if _provider == "custom":
+    if not _raw_llm_url:
+        print("[BrainOS] WARNING: LLM_PROVIDER=custom but LLM_API_BASE is empty — ingestion/ask will fail")
+    vllm_url = _raw_llm_url or "http://localhost:8000/v1"
     vlm_url  = _raw_vlm_url or vllm_url
     llm_client = VLLMClient(base_url=vllm_url)
     vlm_client = VLLMClient(base_url=vlm_url)
-    print(f"[BrainOS] WARNING: no reachable LLM endpoint and no CLAUDE_API_KEY — ingestion/ask will fail")
+    print(f"[BrainOS] Provider: custom endpoint ({vllm_url})")
+elif _provider == "claude":
+    if not _claude_key:
+        print("[BrainOS] WARNING: LLM_PROVIDER=claude but CLAUDE_API_KEY is empty — ingestion/ask will fail")
+    _USING_CLAUDE_FALLBACK = True
+    vllm_url = "https://api.anthropic.com/v1"
+    vlm_url  = vllm_url
+    llm_client = ClaudeAPIClient(api_key=_claude_key or "missing", model=_claude_model)
+    vlm_client = ClaudeAPIClient(api_key=_claude_key or "missing", model=_claude_model)
+    print(f"[BrainOS] Provider: Claude API ({_claude_model})")
 
 
 def _resolve_model(client, env_name: str, env_value: str) -> str:
@@ -275,11 +298,15 @@ def _resolve_model(client, env_name: str, env_value: str) -> str:
     return auto
 
 
-# _model_env = os.getenv("MODEL_NAME", "amd/Llama-3.1-70B-Instruct-FP8-KV")
-# _vlm_model_env = os.getenv("VLM_MODEL_NAME", "llava-hf/llava-v1.6-mistral-7b-hf")
-
-_model_env = os.getenv("MODEL_NAME", "llava-hf/llava-v1.6-mistral-7b-hf")
-_vlm_model_env = os.getenv("VLM_MODEL_NAME", "llava-hf/llava-v1.6-mistral-7b-hf")
+# Defaults are provider-aware: with provider=claude, MODEL_NAME defaults to
+# CLAUDE_MODEL so users only have to set one env var. With provider=custom,
+# MODEL_NAME must match a model served at LLM_API_BASE.
+if _USING_CLAUDE_FALLBACK:
+    _model_env = os.getenv("MODEL_NAME", _claude_model)
+    _vlm_model_env = os.getenv("VLM_MODEL_NAME", _claude_model)
+else:
+    _model_env = os.getenv("MODEL_NAME", "llava-hf/llava-v1.6-mistral-7b-hf")
+    _vlm_model_env = os.getenv("VLM_MODEL_NAME", "llava-hf/llava-v1.6-mistral-7b-hf")
 
 MODEL_NAME = _resolve_model(llm_client, "MODEL_NAME", _model_env)
 VLM_MODEL_NAME = _resolve_model(vlm_client, "VLM_MODEL_NAME", _vlm_model_env)
@@ -530,7 +557,7 @@ print(f"[BrainOS] Embedding backend: {EMBEDDING_BACKEND}")
 
 chroma_client = chromadb.PersistentClient(
     path=CHROMA_PATH,
-    settings=Settings(anonymized_telemetry=False),
+    settings=Settings(anonymized_telemetry=False, allow_reset=True),
 )
 collection = chroma_client.get_or_create_collection(
     name="brainos_knowledge",
@@ -596,6 +623,151 @@ def _unit_search_text(unit: dict) -> str:
 _ENTITY_TOKEN_RE = re.compile(
     r"(?:\b[a-z][a-z0-9]+(?:-[a-z0-9]+)+\b|/[a-z0-9][a-z0-9_./:-]*|\b[A-Z][A-Za-z0-9]*(?:[A-Z][A-Za-z0-9]*)+\b|\b[A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+){0,2}\b)"
 )
+
+
+# ── Entity canonicalization ──────────────────────────────────────────────────
+# Collapse variants like "Intel" / "Intel Corp" / "Intel Corporation" / "Intel,
+# Inc." onto a single node. We strip corporate suffix tokens and punctuation,
+# then compare on a normalized key. Aliases are also indexed so the model can
+# emit `{name: "Intel Corporation", aliases: ["Intel"]}` and we'll merge.
+
+_CORP_SUFFIX_TOKENS = {
+    "inc", "incorporated", "corp", "corporation", "corporate",
+    "ltd", "limited", "llc", "llp", "lp", "co", "company",
+    "gmbh", "ag", "sa", "sas", "plc", "kg", "nv", "bv", "oy",
+    "aps", "srl", "sl", "sarl", "kk", "pty",
+    "holdings", "group", "holding", "industries",
+    "the",
+}
+
+_ENT_PUNCT_RE = re.compile(r"[.,;:'’\"!?()\[\]/&]+")
+
+
+def _canonical_entity_key(name: str) -> str:
+    """Normalized comparison key for an entity name. Lowercases, strips
+    punctuation, drops trailing corporate-suffix tokens, collapses whitespace."""
+    if not name:
+        return ""
+    s = _ENT_PUNCT_RE.sub(" ", name.lower())
+    s = re.sub(r"\s+", " ", s).strip()
+    parts = s.split(" ")
+    # Strip trailing suffix tokens one at a time (handles "intel corp", "intel
+    # corporation", "intel corp ltd"). Stop as soon as we hit a non-suffix token
+    # so we don't accidentally null out a single-word name that happens to be a
+    # suffix (we still allow that case via the early-return below).
+    while len(parts) > 1 and parts[-1] in _CORP_SUFFIX_TOKENS:
+        parts.pop()
+    return " ".join(parts).strip()
+
+
+def _entity_canonical_keys(entity: dict) -> set[str]:
+    """All canonical keys identifying this entity (name + every alias)."""
+    keys: set[str] = {_canonical_entity_key(entity.get("name", ""))}
+    for a in entity.get("aliases", []) or []:
+        keys.add(_canonical_entity_key(a))
+    keys.discard("")
+    return keys
+
+
+def _pick_canonical_name(candidates: list[str]) -> str:
+    """Pick the most canonical-looking display name from a list of variants.
+    Heuristics:
+      1. Prefer names that *have* a corporate suffix (more disambiguated).
+      2. Then prefer the longest.
+      3. Stable tiebreaker: first occurrence.
+    """
+    if not candidates:
+        return ""
+    def has_suffix(n: str) -> bool:
+        last = n.lower().strip(".,").split()[-1] if n.strip() else ""
+        return last in _CORP_SUFFIX_TOKENS
+    ranked = sorted(
+        enumerate(candidates),
+        key=lambda iv: (not has_suffix(iv[1]), -len(iv[1]), iv[0]),
+    )
+    return ranked[0][1]
+
+
+def _consolidate_entities(brain: dict) -> dict[str, str]:
+    """Group `brain['entities']` by canonical key and merge duplicates in place.
+
+    Returns a rename map {old_display_name: canonical_display_name} that the
+    caller should apply to relationships and units so all references converge.
+    Idempotent: a brain already free of duplicates returns {}.
+    """
+    entities = brain.get("entities", []) or []
+    by_key: dict[str, list[dict]] = {}
+    for ent in entities:
+        for k in _entity_canonical_keys(ent):
+            by_key.setdefault(k, []).append(ent)
+
+    # Union-find: walk the key→entities map and group entities that share any key.
+    seen_ids: set[int] = set()
+    groups: list[list[dict]] = []
+    for group_seed in by_key.values():
+        unseen = [e for e in group_seed if id(e) not in seen_ids]
+        if not unseen:
+            continue
+        group: list[dict] = []
+        stack = list(unseen)
+        while stack:
+            ent = stack.pop()
+            if id(ent) in seen_ids:
+                continue
+            seen_ids.add(id(ent))
+            group.append(ent)
+            for k in _entity_canonical_keys(ent):
+                for sib in by_key.get(k, []):
+                    if id(sib) not in seen_ids:
+                        stack.append(sib)
+        if group:
+            groups.append(group)
+
+    rename_map: dict[str, str] = {}
+    survivors: list[dict] = []
+    for group in groups:
+        if len(group) == 1:
+            survivors.append(group[0])
+            continue
+        # Merge group into one canonical entity
+        names = [g["name"] for g in group if g.get("name")]
+        canonical_name = _pick_canonical_name(names)
+        winner = next(g for g in group if g["name"] == canonical_name)
+        aliases: set[str] = set()
+        for g in group:
+            for a in g.get("aliases", []) or []:
+                if a and a != canonical_name:
+                    aliases.add(a)
+            if g["name"] != canonical_name:
+                aliases.add(g["name"])
+                rename_map[g["name"]] = canonical_name
+        winner["aliases"] = sorted(aliases)
+        survivors.append(winner)
+
+    # Preserve original ordering when nothing was merged, otherwise rebuild.
+    if rename_map:
+        # Keep relative order of first-occurrence of each surviving id
+        order = {id(e): i for i, e in enumerate(entities)}
+        survivors.sort(key=lambda e: order.get(id(e), 1 << 30))
+        brain["entities"] = survivors
+    return rename_map
+
+
+def _apply_entity_renames(brain: dict, rename_map: dict[str, str]) -> None:
+    """Rewrite stale entity names across relationships and units in place."""
+    if not rename_map:
+        return
+    for rel in brain.get("relationships", []) or []:
+        if rel.get("from") in rename_map:
+            rel["from"] = rename_map[rel["from"]]
+        if rel.get("to") in rename_map:
+            rel["to"] = rename_map[rel["to"]]
+    for u in brain.get("units", []) or []:
+        if u.get("subject") in rename_map:
+            u["subject"] = rename_map[u["subject"]]
+        ents = u.get("entities") or []
+        if ents:
+            u["entities"] = sorted({rename_map.get(e, e) for e in ents if e})
 
 
 def _fallback_entities_from_text(text: str) -> list[str]:
@@ -1526,22 +1698,43 @@ class StructuringAgent:
                 } for chunk in new_raw_chunks],
             )
 
-        # Entity dedup by name (case-insensitive)
+        # Entity dedup by canonical key (handles "Intel" / "Intel Corporation" /
+        # "Intel Corp" / "Intel, Inc." → one node). Match against existing
+        # names AND aliases via _canonical_entity_key; merge aliases on collision.
         new_entities = []
         for e in entities:
-            entity = {
-                "id": str(uuid.uuid4())[:8],
-                "name": e.get("name", ""),
-                "kind": e.get("kind", "concept"),
-                "aliases": e.get("aliases", []),
-            }
-            existing = next(
-                (x for x in brain["entities"] if x["name"].lower() == entity["name"].lower()),
-                None,
-            )
+            raw_name = (e.get("name") or "").strip()
+            if not raw_name:
+                continue
+            incoming_aliases = [a.strip() for a in (e.get("aliases") or []) if a and a.strip()]
+            incoming_keys = {_canonical_entity_key(raw_name)}
+            for a in incoming_aliases:
+                incoming_keys.add(_canonical_entity_key(a))
+            incoming_keys.discard("")
+
+            existing = None
+            for x in brain["entities"]:
+                if incoming_keys & _entity_canonical_keys(x):
+                    existing = x
+                    break
+
             if existing:
-                existing["aliases"] = list(set(existing["aliases"] + entity["aliases"]))
+                # Merge incoming name + aliases into the existing entity's
+                # aliases, keeping the existing display name as canonical.
+                aliases = set(existing.get("aliases") or [])
+                if raw_name.lower() != (existing.get("name") or "").lower():
+                    aliases.add(raw_name)
+                for a in incoming_aliases:
+                    if a.lower() != (existing.get("name") or "").lower():
+                        aliases.add(a)
+                existing["aliases"] = sorted(aliases)
             else:
+                entity = {
+                    "id": str(uuid.uuid4())[:8],
+                    "name": raw_name,
+                    "kind": e.get("kind", "concept"),
+                    "aliases": incoming_aliases,
+                }
                 brain["entities"].insert(0, entity)
                 new_entities.append(entity)
 
@@ -1602,6 +1795,18 @@ class StructuringAgent:
             }
             brain["relationships"].insert(0, edge)
             new_rels.append(edge)
+
+        # ── Step 6: consolidate entities (merge duplicates by canonical key,
+        # e.g. "Intel" + "Intel Corporation") and rewrite relationships +
+        # units to point at the canonical names. Idempotent.
+        rename_map = _consolidate_entities(brain)
+        if rename_map:
+            _apply_entity_renames(brain, rename_map)
+            _debug_event(
+                "store.entities.consolidated",
+                "Merged duplicate entities by canonical name",
+                merges=rename_map,
+            )
 
         _write_brain(brain)
         _build_indexes(brain)
@@ -3385,19 +3590,76 @@ def delete_unit(unit_id: str):
 
 @app.delete("/api/clear")
 def clear_all():
-    """Delete and recreate the ChromaDB collection, then wipe brain.json."""
-    global collection
+    """Hard reset: nuke brain.json + the entire chroma_db directory (sqlite + all
+    .bin files for every collection), then rebuild a fresh empty state and
+    in-memory indexes. Anything under DATA_DIR/uploads is also wiped."""
+    global collection, chroma_client
+    removed: list[str] = []
+
+    # 1. Let Chroma do its own reset first. With allow_reset=True this closes
+    #    open file handles, drops every collection, and clears the persistent
+    #    state — and crucially keeps the SharedSystemClient cache consistent
+    #    so subsequent calls on the same `chroma_client` work correctly.
     try:
-        chroma_client.delete_collection("brainos_knowledge")
-    except Exception:
-        pass
+        chroma_client.reset()
+    except Exception as e:
+        print(f"[BrainOS] chroma_client.reset() failed (continuing): {e}")
+
+    # 2. Belt-and-suspenders: remove anything Chroma may have left behind on
+    #    disk (stale UUID segment folders, the sqlite file itself if Chroma
+    #    didn't reinitialize it). We delete the *contents* of CHROMA_PATH
+    #    rather than the directory, so PersistentClient's path is still valid.
+    if os.path.isdir(CHROMA_PATH):
+        for entry in os.listdir(CHROMA_PATH):
+            target = os.path.join(CHROMA_PATH, entry)
+            try:
+                if os.path.isdir(target):
+                    shutil.rmtree(target)
+                else:
+                    os.remove(target)
+                removed.append(target)
+            except Exception as e:
+                print(f"[BrainOS] WARNING: could not remove {target}: {e}")
+
+    # 3. Remove brain.json itself (not just empty it — easier to spot a wipe).
+    if os.path.exists(BRAIN_JSON):
+        try:
+            os.remove(BRAIN_JSON)
+            removed.append(BRAIN_JSON)
+        except Exception as e:
+            print(f"[BrainOS] WARNING: could not remove {BRAIN_JSON}: {e}")
+
+    # 4. Optional uploads/snapshot dirs that ingestion may have written into.
+    for sub in ("uploads", "ingested", "snapshots"):
+        path = os.path.join(DATA_DIR, sub)
+        if os.path.isdir(path):
+            try:
+                shutil.rmtree(path)
+                removed.append(path)
+            except Exception as e:
+                print(f"[BrainOS] WARNING: could not remove {path}: {e}")
+
+    # 5. Recreate the collection on the same (just-reset) client. Building a
+    #    new PersistentClient here would hit chromadb's SharedSystemClient
+    #    cache and return a stale handle → "attempt to write a readonly
+    #    database". The existing client is the right one to reuse.
     collection = chroma_client.get_or_create_collection(
         name="brainos_knowledge",
         embedding_function=embedding_fn,
         metadata={"hnsw:space": "cosine"},
     )
-    _write_brain({"sources": [], "entities": [], "units": [], "relationships": []})
-    return {"ok": True, "cleared": True}
+
+    # 6. Write a fresh empty brain.json so the frontend sees a clean state.
+    empty_state = {
+        "sources": [], "entities": [], "units": [],
+        "relationships": [], "rawChunks": [],
+    }
+    _write_brain(empty_state)
+
+    # 7. Reset in-memory BM25 + entity indexes.
+    _build_indexes(empty_state)
+
+    return {"ok": True, "cleared": True, "removed": removed}
 
 
 if __name__ == "__main__":

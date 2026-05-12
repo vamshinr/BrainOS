@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Brain OS",
   description:
-    "A living map of how a company actually works — extracted from Slack, email, tickets, docs, and meetings into executable knowledge for AI agents.",
+    "Reconciled memory infrastructure for AI agents. Extracts atomic, attributable facts from Slack, email, tickets and docs; supersedes them when things change; serves them to your agents with provenance on every claim.",
 };
 
 const NAV: { href: string; label: string; hint: string }[] = [
@@ -65,9 +65,9 @@ export default function RootLayout({
                   CB
                 </div>
                 <div>
-                  <div className="font-semibold leading-none">Company Brain</div>
+                  <div className="font-semibold leading-none">Brain OS</div>
                   <div className="text-[11px] text-[var(--muted-foreground)] mt-0.5">
-                    The layer agents need
+                    Memory for AI agents
                   </div>
                 </div>
               </div>
@@ -91,8 +91,8 @@ export default function RootLayout({
             <div className="absolute bottom-6 left-5 right-5 space-y-4">
               <ThemeToggle />
               <p className="text-[11px] text-[var(--muted-foreground)] leading-relaxed">
-                Pull knowledge from every fragmented source. Structure it. Keep it
-                current. Ship it as a skill file.
+                Atomic facts, reconciled when things change, served to your
+                agents with provenance on every claim.
               </p>
             </div>
           </aside>
