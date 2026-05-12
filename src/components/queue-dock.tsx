@@ -146,6 +146,28 @@ export function QueueDock() {
     } catch {}
   };
 
+  // When idle and collapsed, render a small floating badge instead of the full
+  // 320px card so the dock doesn't obscure page content. Click to expand.
+  if (idle && !open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="fixed bottom-4 right-4 z-50 size-10 rounded-full bg-[var(--card)] border shadow-lg flex items-center justify-center hover:bg-[var(--muted)]/60 transition-colors group"
+        title={connected ? "Queue · idle (click for history)" : "Queue · disconnected"}
+        aria-label="Open queue"
+      >
+        <span
+          className={`size-2.5 rounded-full ${connected ? "bg-emerald-500" : "bg-zinc-400"}`}
+        />
+        {recent.length > 0 && (
+          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[var(--muted)] text-[10px] font-mono leading-none flex items-center justify-center text-[var(--muted-foreground)] group-hover:bg-[var(--accent)]/15 group-hover:text-[var(--accent)] transition-colors">
+            {recent.length > 99 ? "99+" : recent.length}
+          </span>
+        )}
+      </button>
+    );
+  }
+
   return (
     <div className="fixed bottom-4 right-4 z-50 w-[320px]">
       <div className="rounded-lg border bg-[var(--card)] shadow-lg overflow-hidden">

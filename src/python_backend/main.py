@@ -3701,38 +3701,80 @@ def delete_unit(unit_id: str):
 
 @app.delete("/api/clear")
 def clear_all():
-    """Hard reset: nuke brain.json + the entire chroma_db directory (sqlite + all
-    .bin files for every collection), then rebuild a fresh empty state and
-    in-memory indexes. Anything under DATA_DIR/uploads is also wiped."""
-    global collection, chroma_client
+    """Hard reset of the entire RAG pipeline:
+      • ChromaDB collection (sysdb row + segment .bin files via Chroma's API)
+      • Any orphan segment dirs left behind by previous crashes
+      • brain.json
+      • uploads/ingested/snapshots dirs
+      • in-memory BM25 + entity indexes
+
+    We deliberately do NOT manually delete chroma.sqlite3 — Chroma holds an
+    open SQLite handle to it, and yanking the file out from under that handle
+    leaves the next operation hitting a schema-less DB ("no such table:
+    collections"). Instead we use Chroma's own delete_collection() + reset()
+    which clean up .bin files via the segment manager."""
+    global collection
     removed: list[str] = []
 
-    # 1. Let Chroma do its own reset first. With allow_reset=True this closes
-    #    open file handles, drops every collection, and clears the persistent
-    #    state — and crucially keeps the SharedSystemClient cache consistent
-    #    so subsequent calls on the same `chroma_client` work correctly.
+    # Snapshot the active collection's segment dirs BEFORE delete_collection so
+    # we know what to expect on disk afterwards (used to find true orphans in
+    # step 4).
+    chroma_subdirs_before: set[str] = set()
+    if os.path.isdir(CHROMA_PATH):
+        chroma_subdirs_before = {
+            e for e in os.listdir(CHROMA_PATH)
+            if os.path.isdir(os.path.join(CHROMA_PATH, e))
+        }
+
+    # 1. Drop the collection. Chroma's segment manager removes the segment
+    # directory on disk (data_level0.bin, header.bin, length.bin,
+    # link_lists.bin) AND the sysdb row.
+    try:
+        chroma_client.delete_collection("brainos_knowledge")
+        removed.append("chroma:brainos_knowledge")
+    except Exception as e:
+        # Already gone / never existed — fine, continue.
+        print(f"[BrainOS] delete_collection skipped: {e}")
+
+    # 2. Reset the rest of the sysdb (catches any orphan collections from
+    # earlier crashes). With allow_reset=True this is non-destructive to the
+    # client's connection — sqlite tables are dropped and recreated empty.
     try:
         chroma_client.reset()
     except Exception as e:
-        print(f"[BrainOS] chroma_client.reset() failed (continuing): {e}")
+        print(f"[BrainOS] chroma_client.reset() skipped: {e}")
 
-    # 2. Belt-and-suspenders: remove anything Chroma may have left behind on
-    #    disk (stale UUID segment folders, the sqlite file itself if Chroma
-    #    didn't reinitialize it). We delete the *contents* of CHROMA_PATH
-    #    rather than the directory, so PersistentClient's path is still valid.
+    # 3. Recreate the collection on the SAME client. Building a new
+    # PersistentClient would hit chromadb's SharedSystemClient cache and
+    # return a stale handle ("readonly database") — bad.
+    collection = chroma_client.get_or_create_collection(
+        name="brainos_knowledge",
+        embedding_function=embedding_fn,
+        metadata={"hnsw:space": "cosine"},
+    )
+
+    # 4. Defensive: remove any UUID-shaped segment dirs that existed BEFORE
+    # the reset and weren't cleaned up by Chroma (true orphans — usually from
+    # an interrupted previous reset). Safe to rmtree because they're no
+    # longer referenced by any collection in the freshly-reset sysdb.
     if os.path.isdir(CHROMA_PATH):
-        for entry in os.listdir(CHROMA_PATH):
-            target = os.path.join(CHROMA_PATH, entry)
+        chroma_subdirs_after: set[str] = {
+            e for e in os.listdir(CHROMA_PATH)
+            if os.path.isdir(os.path.join(CHROMA_PATH, e))
+        }
+        # Anything that existed before but Chroma didn't touch during reset is
+        # an orphan. Belt-and-suspenders only — the common case has no orphans.
+        for entry in chroma_subdirs_before & chroma_subdirs_after:
+            if len(entry) != 36:  # only UUID-shaped names
+                continue
+            full = os.path.join(CHROMA_PATH, entry)
             try:
-                if os.path.isdir(target):
-                    shutil.rmtree(target)
-                else:
-                    os.remove(target)
-                removed.append(target)
+                shutil.rmtree(full)
+                removed.append(full)
             except Exception as e:
-                print(f"[BrainOS] WARNING: could not remove {target}: {e}")
+                print(f"[BrainOS] WARNING: could not remove orphan {full}: {e}")
 
-    # 3. Remove brain.json itself (not just empty it — easier to spot a wipe).
+    # 5. brain.json
     if os.path.exists(BRAIN_JSON):
         try:
             os.remove(BRAIN_JSON)
@@ -3740,7 +3782,7 @@ def clear_all():
         except Exception as e:
             print(f"[BrainOS] WARNING: could not remove {BRAIN_JSON}: {e}")
 
-    # 4. Optional uploads/snapshot dirs that ingestion may have written into.
+    # 6. uploads / ingested / snapshots — ingest artifacts
     for sub in ("uploads", "ingested", "snapshots"):
         path = os.path.join(DATA_DIR, sub)
         if os.path.isdir(path):
@@ -3750,24 +3792,15 @@ def clear_all():
             except Exception as e:
                 print(f"[BrainOS] WARNING: could not remove {path}: {e}")
 
-    # 5. Recreate the collection on the same (just-reset) client. Building a
-    #    new PersistentClient here would hit chromadb's SharedSystemClient
-    #    cache and return a stale handle → "attempt to write a readonly
-    #    database". The existing client is the right one to reuse.
-    collection = chroma_client.get_or_create_collection(
-        name="brainos_knowledge",
-        embedding_function=embedding_fn,
-        metadata={"hnsw:space": "cosine"},
-    )
-
-    # 6. Write a fresh empty brain.json so the frontend sees a clean state.
+    # 7. Fresh empty brain.json so the frontend sees a clean state.
     empty_state = {
         "sources": [], "entities": [], "units": [],
         "relationships": [], "rawChunks": [],
     }
     _write_brain(empty_state)
 
-    # 7. Reset in-memory BM25 + entity indexes.
+    # 8. In-memory BM25 + entity indexes (the BM25 index would otherwise still
+    # hold references to the deleted units).
     _build_indexes(empty_state)
 
     return {"ok": True, "cleared": True, "removed": removed}

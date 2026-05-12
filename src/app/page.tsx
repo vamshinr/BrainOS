@@ -47,11 +47,14 @@ export default async function Home() {
     <div className="px-10 py-10 max-w-6xl">
       <header className="mb-10">
         <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
-          Brain OS · agent memory
+          Brain OS
         </div>
         <h1 className="text-4xl font-semibold tracking-tight">
           Reconciled memory for your AI agents.
         </h1>
+        <p className="mt-2 text-lg text-[var(--foreground)]/80 max-w-2xl">
+          Stop stuffing your agent's prompt with noisy RAG chunks.
+        </p>
         <p className="mt-3 text-[var(--muted-foreground)] max-w-2xl">
           Atomic, attributable facts extracted from Slack, email, tickets and
           docs. Superseded when things change. Loaded into your agent with
@@ -185,10 +188,11 @@ function FirstRunLanding() {
           Brain OS · agent memory infrastructure
         </div>
         <h1 className="text-4xl font-semibold tracking-tight leading-tight">
-          Stop stuffing your agent&apos;s prompt
-          <br />
-          with noisy RAG chunks.
+          The knowledge layer between scattered company data and AI agents.
         </h1>
+        <p className="mt-3 text-lg text-[var(--foreground)]/80 max-w-2xl">
+          Stop stuffing your agent&apos;s prompt with noisy RAG chunks.
+        </p>
         <p className="mt-4 text-[var(--muted-foreground)] max-w-2xl leading-relaxed">
           Brain OS turns Slack threads, emails, tickets and docs into{" "}
           <strong className="text-[var(--foreground)]">atomic, attributable facts</strong> — reconciled

@@ -98,7 +98,7 @@ export default function RootLayout({
             </div>
           </aside>
 
-          <main className="min-w-0">{children}</main>
+          <main className="min-w-0 pb-24">{children}</main>
         </div>
         <QueueDock />
       </body>
