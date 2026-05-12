@@ -4,7 +4,7 @@ export const runtime = "nodejs";
 
 export async function POST() {
   try {
-    const res = await fetch(`${BACKEND_URL}/api/analyze/gaps", {
+    const res = await fetch(`${BACKEND_URL}/api/analyze/gaps`, {
       method: "POST",
     });
     if (!res.ok) {
