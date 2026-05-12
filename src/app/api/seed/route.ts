@@ -1,3 +1,4 @@
+import { BACKEND_URL } from "@/lib/backend";
 import { SEED_SOURCES } from "@/lib/seed-data";
 import { invalidateCache } from "@/lib/store";
 

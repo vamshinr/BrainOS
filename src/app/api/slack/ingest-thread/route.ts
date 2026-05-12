@@ -1,3 +1,4 @@
+import { BACKEND_URL } from "@/lib/backend";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { invalidateCache } from "@/lib/store";
