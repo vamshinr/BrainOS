@@ -1,10 +1,9 @@
 import { BACKEND_URL } from "@/lib/backend";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { invalidateCache } from "@/lib/store";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 const Body = z.object({
   kind: z.enum(["slack", "email", "ticket", "doc", "meeting", "wiki", "code", "other"]),
@@ -34,24 +33,14 @@ export async function POST(req: Request) {
       throw new Error(`Backend returned ${backendRes.status}: ${errText}`);
     }
 
+    // Pass the enqueue response through verbatim — {job_id, status,
+    // queue_position, title}. The actual ingest happens asynchronously on the
+    // backend worker; the QueueDock subscribes to /api/jobs/stream for
+    // progress and triggers cache invalidation when the job finishes.
     const data = await backendRes.json();
-
-    // Invalidate the Next.js in-memory cache so the dashboard reads fresh data
-    // from the brain.json that Python just wrote to.
-    invalidateCache();
-
-    const totals = data.brain_totals ?? { sources: 1, entities: 0, units: data.units_stored ?? 0 };
-
-    return NextResponse.json({
-      sourceId: data.source_id,
-      addedUnits: data.units_stored ?? 0,
-      addedEntities: data.entities_stored ?? 0,
-      addedRelationships: data.relationships_stored ?? 0,
-      supersededUnits: data.units_superseded ?? 0,
-      totals,
-    });
+    return NextResponse.json(data, { status: backendRes.status });
   } catch (e) {
-    console.error("Agent Backend Error:", e);
-    return NextResponse.json({ error: "Agent Backend failed", detail: String(e) }, { status: 500 });
+    console.error("Ingest enqueue error:", e);
+    return NextResponse.json({ error: "Backend failed to enqueue", detail: String(e) }, { status: 500 });
   }
 }

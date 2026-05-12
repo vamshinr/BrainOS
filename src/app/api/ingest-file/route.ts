@@ -1,9 +1,8 @@
 import { BACKEND_URL } from "@/lib/backend";
 import { NextResponse } from "next/server";
-import { invalidateCache } from "@/lib/store";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 const ALLOWED_TYPES = new Set([
   "application/pdf",
@@ -60,23 +59,11 @@ export async function POST(req: Request) {
       throw new Error(`Backend returned ${backendRes.status}: ${errText}`);
     }
 
+    // Pass the enqueue response through. See /api/ingest/route.ts for why.
     const data = await backendRes.json();
-    invalidateCache();
-
-    const totals = data.brain_totals ?? { sources: 1, entities: 0, units: data.units_stored ?? 0 };
-
-    return NextResponse.json({
-      sourceId: data.source_id,
-      addedUnits: data.units_stored ?? 0,
-      addedEntities: data.entities_stored ?? 0,
-      addedRelationships: data.relationships_stored ?? 0,
-      supersededUnits: data.units_superseded ?? 0,
-      charsExtracted: data.chars_extracted ?? 0,
-      fallbackExtraction: data.fallback_extraction ?? false,
-      totals,
-    });
+    return NextResponse.json(data, { status: backendRes.status });
   } catch (e) {
-    console.error("File Ingest Error:", e);
-    return NextResponse.json({ error: "File ingest failed", detail: String(e) }, { status: 500 });
+    console.error("File enqueue error:", e);
+    return NextResponse.json({ error: "Backend failed to enqueue file", detail: String(e) }, { status: 500 });
   }
 }

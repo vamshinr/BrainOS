@@ -6,6 +6,7 @@ import uuid
 import time
 import threading
 import datetime
+import queue as _stdlib_queue
 import re
 import io
 import collections
@@ -19,6 +20,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 from rank_bm25 import BM25Okapi
@@ -637,26 +639,57 @@ _CORP_SUFFIX_TOKENS = {
     "gmbh", "ag", "sa", "sas", "plc", "kg", "nv", "bv", "oy",
     "aps", "srl", "sl", "sarl", "kk", "pty",
     "holdings", "group", "holding", "industries",
-    "the",
 }
+
+_ARTICLE_TOKENS = {"the", "a", "an"}
 
 _ENT_PUNCT_RE = re.compile(r"[.,;:'’\"!?()\[\]/&]+")
 
 
+def _singularize(token: str) -> str:
+    """Crude English plural → singular. Conservative on short tokens to avoid
+    mangling proper nouns ('AMD' stays 'AMD'). Handles the common cases:
+      companies → company   tomatoes → tomato   apples → apple
+      boxes → box           processes → process  buses (kept as bus only via 's' rule below)
+    Skips known non-plural endings: 'ss', 'is', 'us', 'os', 'as'.
+    """
+    if len(token) <= 3:
+        return token
+    # 'ies' → 'y'   (companies, policies, batteries)
+    if token.endswith("ies") and token[-4] not in "aeiou":
+        return token[:-3] + "y"
+    # 'oes' → 'o'   (tomatoes, potatoes, heroes)
+    if token.endswith("oes") and len(token) > 4:
+        return token[:-2]
+    # '(s|x|z|sh|ch)es' → drop 'es'  (boxes, dishes, brushes, processes)
+    if (token.endswith(("ses", "xes", "zes", "shes", "ches"))) and len(token) > 4:
+        return token[:-2]
+    # plain trailing 's', but skip false plurals
+    if (token.endswith("s")
+            and not token.endswith(("ss", "is", "us", "os", "as"))):
+        return token[:-1]
+    return token
+
+
 def _canonical_entity_key(name: str) -> str:
-    """Normalized comparison key for an entity name. Lowercases, strips
-    punctuation, drops trailing corporate-suffix tokens, collapses whitespace."""
+    """Normalized comparison key. Steps applied in order:
+      1. lowercase + strip punctuation
+      2. drop leading articles  ("the AMD" / "an Onion" → "AMD" / "Onion")
+      3. drop trailing corporate suffixes  ("Intel Corp" / "Intel, Inc." → "Intel")
+      4. singularize each remaining token  ("tomatoes" → "tomato", "companies" → "company")
+    So 'intel', 'Intel Corp', 'Intel, Inc.', 'The Intel Corporation' all
+    canonicalize to 'intel'. Tomato / Tomatoes / tomato. AMD / The AMD. Etc.
+    """
     if not name:
         return ""
     s = _ENT_PUNCT_RE.sub(" ", name.lower())
     s = re.sub(r"\s+", " ", s).strip()
     parts = s.split(" ")
-    # Strip trailing suffix tokens one at a time (handles "intel corp", "intel
-    # corporation", "intel corp ltd"). Stop as soon as we hit a non-suffix token
-    # so we don't accidentally null out a single-word name that happens to be a
-    # suffix (we still allow that case via the early-return below).
+    while len(parts) > 1 and parts[0] in _ARTICLE_TOKENS:
+        parts.pop(0)
     while len(parts) > 1 and parts[-1] in _CORP_SUFFIX_TOKENS:
         parts.pop()
+    parts = [_singularize(p) for p in parts]
     return " ".join(parts).strip()
 
 
@@ -768,6 +801,46 @@ def _apply_entity_renames(brain: dict, rename_map: dict[str, str]) -> None:
         ents = u.get("entities") or []
         if ents:
             u["entities"] = sorted({rename_map.get(e, e) for e in ents if e})
+
+
+def _build_entity_resolver(entities: list[dict]):
+    """Return a callable that maps any name variant to the canonical display
+    name. A 'variant' is any string whose canonical key matches the canonical
+    key of an existing entity's name or aliases. Returns the input unchanged
+    when no match is found, so unknown names pass through.
+
+    Used at insert-time so freshly-extracted relationships and unit subjects/
+    entities never reference a name that isn't in brain['entities']."""
+    exact: dict[str, str] = {}       # lowercased name/alias → canonical display
+    by_key: dict[str, str] = {}      # canonical key → canonical display
+    for ent in entities or []:
+        display = (ent.get("name") or "").strip()
+        if not display:
+            continue
+        exact[display.lower()] = display
+        key = _canonical_entity_key(display)
+        if key:
+            by_key.setdefault(key, display)
+        for a in ent.get("aliases") or []:
+            if not a:
+                continue
+            exact[a.lower()] = display
+            ak = _canonical_entity_key(a)
+            if ak:
+                by_key.setdefault(ak, display)
+
+    def resolve(name: str) -> str:
+        if not name:
+            return name
+        hit = exact.get(name.lower())
+        if hit:
+            return hit
+        key = _canonical_entity_key(name)
+        if key and key in by_key:
+            return by_key[key]
+        return name
+
+    return resolve
 
 
 def _fallback_entities_from_text(text: str) -> list[str]:
@@ -1738,6 +1811,18 @@ class StructuringAgent:
                 brain["entities"].insert(0, entity)
                 new_entities.append(entity)
 
+        # Resolve every incoming entity reference (relationship endpoints, unit
+        # subjects, unit entity arrays) against the now-canonicalized entity
+        # list. Prevents this-ingest's edges/units from pointing at a name
+        # that's only an alias of an existing canonical entity — which would
+        # otherwise spawn a phantom node on the graph view.
+        resolve_entity = _build_entity_resolver(brain["entities"])
+        for su in stored_units:
+            if su.get("subject"):
+                su["subject"] = resolve_entity(su["subject"])
+            if su.get("entities"):
+                su["entities"] = sorted({resolve_entity(e) for e in su["entities"] if e})
+
         # Mark superseded units as stale in brain.json
         superseded_count = 0
         for bu in brain["units"]:
@@ -2429,6 +2514,310 @@ feedback_agent = FeedbackAgent()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Async Job Queue
+# ══════════════════════════════════════════════════════════════════════════════
+# Single-worker FIFO queue for heavy LLM-bound work (text/file/image ingest).
+# Routes enqueue jobs and return immediately with a job_id; one background
+# thread processes them one at a time so concurrent uploads don't fight over
+# the LLM endpoint. SSE stream at /api/jobs/stream feeds the UI dock.
+
+class Job:
+    def __init__(self, *, kind: str, title: str, handler, payload: Optional[dict] = None):
+        self.id = str(uuid.uuid4())[:8]
+        self.kind = kind                  # "ingest_text" | "ingest_file" | "ingest_image"
+        self.title = title
+        self.status = "queued"            # queued | running | completed | failed | canceled
+        self.progress = 0.0               # 0..1
+        self.step: Optional[str] = None   # human-readable current step
+        self.error: Optional[str] = None
+        self.result: Optional[dict] = None
+        self.payload = payload or {}      # private — never returned via to_public()
+        self.handler = handler
+        self.created_at = _utc_now_iso()
+        self.started_at: Optional[str] = None
+        self.finished_at: Optional[str] = None
+        self.cancel_requested = False
+
+    def to_public(self) -> dict:
+        return {
+            "id": self.id,
+            "kind": self.kind,
+            "title": self.title,
+            "status": self.status,
+            "progress": self.progress,
+            "step": self.step,
+            "error": self.error,
+            "result": self.result,
+            "createdAt": self.created_at,
+            "startedAt": self.started_at,
+            "finishedAt": self.finished_at,
+        }
+
+
+class JobQueue:
+    """Single-worker FIFO. submit() returns immediately. The background thread
+    runs jobs serially. Listeners get live events for the SSE stream."""
+
+    RECENT_LIMIT = 50
+
+    def __init__(self):
+        self._q: _stdlib_queue.Queue = _stdlib_queue.Queue()
+        self._jobs: dict[str, Job] = {}
+        self._queue_order: list[str] = []
+        self._active_id: Optional[str] = None
+        self._recent_ids = collections.deque(maxlen=self.RECENT_LIMIT)
+        self._lock = threading.Lock()
+        self._listeners: list[_stdlib_queue.Queue] = []
+        threading.Thread(target=self._run_worker, daemon=True, name="JobQueueWorker").start()
+
+    def submit(self, *, kind: str, title: str, handler, payload: Optional[dict] = None) -> Job:
+        job = Job(kind=kind, title=title, handler=handler, payload=payload)
+        with self._lock:
+            self._jobs[job.id] = job
+            self._queue_order.append(job.id)
+        self._q.put(job.id)
+        self._notify("job.queued", job)
+        return job
+
+    def cancel(self, job_id: str) -> bool:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                return False
+            if job.status == "queued":
+                job.status = "canceled"
+                job.finished_at = _utc_now_iso()
+                if job.id in self._queue_order:
+                    self._queue_order.remove(job.id)
+                self._recent_ids.append(job.id)
+                self._notify("job.canceled", job)
+                return True
+            if job.status == "running":
+                # Can't cleanly interrupt an in-flight LLM call. Mark a flag the
+                # handler can poll between steps if it wants to abort early.
+                job.cancel_requested = True
+                return True
+            return False
+
+    def get(self, job_id: str) -> Optional[dict]:
+        job = self._jobs.get(job_id)
+        return job.to_public() if job else None
+
+    def queue_position(self, job_id: str) -> int:
+        with self._lock:
+            try:
+                return self._queue_order.index(job_id) + 1
+            except ValueError:
+                return 0
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            active = self._jobs[self._active_id].to_public() if self._active_id and self._active_id in self._jobs else None
+            queued = [self._jobs[i].to_public() for i in self._queue_order if i in self._jobs]
+            recent = [self._jobs[i].to_public() for i in reversed(self._recent_ids) if i in self._jobs]
+            return {"active": active, "queued": queued, "recent": recent}
+
+    def update_progress(self, job_id: str, *, progress: Optional[float] = None, step: Optional[str] = None):
+        job = self._jobs.get(job_id)
+        if not job:
+            return
+        if progress is not None:
+            job.progress = max(0.0, min(1.0, float(progress)))
+        if step is not None:
+            job.step = step
+        self._notify("job.progress", job)
+
+    def listen(self) -> _stdlib_queue.Queue:
+        q: _stdlib_queue.Queue = _stdlib_queue.Queue(maxsize=256)
+        with self._lock:
+            self._listeners.append(q)
+        return q
+
+    def unlisten(self, q):
+        with self._lock:
+            if q in self._listeners:
+                self._listeners.remove(q)
+
+    def _notify(self, event: str, job: Job):
+        payload = {"event": event, "job": job.to_public()}
+        with self._lock:
+            dead = []
+            for q in self._listeners:
+                try:
+                    q.put_nowait(payload)
+                except _stdlib_queue.Full:
+                    dead.append(q)
+            for q in dead:
+                self._listeners.remove(q)
+
+    def _run_worker(self):
+        while True:
+            job_id = self._q.get()
+            with self._lock:
+                job = self._jobs.get(job_id)
+                if not job or job.status != "queued":
+                    continue
+                self._active_id = job.id
+                if job.id in self._queue_order:
+                    self._queue_order.remove(job.id)
+                job.status = "running"
+                job.started_at = _utc_now_iso()
+            self._notify("job.started", job)
+            try:
+                result = job.handler(job, self)
+                job.result = result if isinstance(result, dict) else {"value": result}
+                job.status = "completed"
+                job.progress = 1.0
+            except Exception as e:
+                job.error = str(e)
+                job.status = "failed"
+                print(f"[BrainOS] job {job.id} ({job.kind}) failed: {e}")
+            finally:
+                job.finished_at = _utc_now_iso()
+                with self._lock:
+                    self._active_id = None
+                    self._recent_ids.append(job.id)
+                self._notify("job.finished", job)
+
+
+job_queue = JobQueue()
+
+
+# ── Job handlers ─────────────────────────────────────────────────────────────
+# Each handler takes (job, queue) and returns a result dict. The queue arg is
+# used to publish step/progress updates the UI dock subscribes to.
+
+def _handler_ingest_text(job: Job, q: JobQueue) -> dict:
+    p = job.payload
+    q.update_progress(job.id, step="extracting facts", progress=0.15)
+    extraction = ingest_agent.extract_from_text(
+        p["kind"], p["title"], p["content"], model_override=p.get("model"),
+    )
+    q.update_progress(job.id, step="reconciling + storing", progress=0.7)
+    source_id = str(uuid.uuid4())[:8]
+    now = _utc_now_iso()
+    source = {
+        "id": source_id, "kind": p["kind"], "title": p["title"],
+        "content": p["content"], "url": p.get("url"), "capturedAt": now,
+    }
+    result = struct_agent.embed_and_store(
+        source_id=source_id, source=source,
+        units=extraction.get("units", []),
+        entities=extraction.get("entities", []),
+        relationships=extraction.get("relationships", []),
+        raw_chunks=_chunk_text(p["content"], max_chars=_MAX_EXTRACTION_CHARS),
+    )
+    return {
+        "source_id": source_id,
+        "units_extracted": len(extraction.get("units", [])),
+        "entities_extracted": len(extraction.get("entities", [])),
+        "relationships_extracted": len(extraction.get("relationships", [])),
+        **result,
+    }
+
+
+def _handler_ingest_file(job: Job, q: JobQueue) -> dict:
+    p = job.payload
+    filename = p["filename"]
+    data: bytes = p["data"]
+    q.update_progress(job.id, step="extracting text", progress=0.05)
+    text = _extract_file_text(filename, data)
+    if (
+        not text.strip()
+        or text.startswith("[PDF has no selectable")
+        or text.startswith("[PDF extraction failed")
+        or text.startswith("[DOC extraction failed")
+        or text.startswith("[DOCX extraction failed")
+    ):
+        raise RuntimeError(text if text.startswith("[") else "Could not extract any text from the file.")
+    chunks = _chunk_text(text, max_chars=_MAX_EXTRACTION_CHARS)
+    all_units, all_entities, all_relationships = [], [], []
+    for idx, chunk in enumerate(chunks, start=1):
+        q.update_progress(
+            job.id,
+            step=f"extracting facts (chunk {idx}/{len(chunks)})",
+            progress=0.1 + 0.6 * (idx / max(len(chunks), 1)),
+        )
+        ex = ingest_agent.extract_from_text(p["kind"], p["title"], chunk, model_override=p.get("model"))
+        all_units.extend(ex.get("units", []))
+        all_entities.extend(ex.get("entities", []))
+        all_relationships.extend(ex.get("relationships", []))
+    used_fallback = False
+    if not (all_units or all_entities or all_relationships):
+        fb = _fallback_extract_from_document(p["kind"], p["title"], text)
+        all_units = fb.get("units", [])
+        all_entities = fb.get("entities", [])
+        all_relationships = fb.get("relationships", [])
+        used_fallback = True
+    q.update_progress(job.id, step="reconciling + storing", progress=0.85)
+    source_id = str(uuid.uuid4())[:8]
+    now = _utc_now_iso()
+    source = {
+        "id": source_id, "kind": p["kind"], "title": p["title"],
+        "content": text[:2000], "url": p.get("url"), "capturedAt": now,
+        "uploadedFilename": filename, "charCount": len(text),
+        "chunkCount": len(chunks),
+        "extractionMode": "fallback" if used_fallback else "model",
+    }
+    result = struct_agent.embed_and_store(
+        source_id=source_id, source=source,
+        units=all_units, entities=all_entities,
+        relationships=all_relationships, raw_chunks=chunks,
+    )
+    return {
+        "source_id": source_id, "chunks_processed": len(chunks),
+        "units_extracted": len(all_units),
+        "entities_extracted": len(all_entities),
+        "relationships_extracted": len(all_relationships),
+        "fallback_extraction": used_fallback,
+        **result,
+    }
+
+
+def _handler_ingest_image(job: Job, q: JobQueue) -> dict:
+    p = job.payload
+    image_data: bytes = p["data"]
+    mime = p.get("mime") or "image/png"
+    q.update_progress(job.id, step="describing image (VLM)", progress=0.15)
+    description = ingest_agent.describe_image(image_data, mime, model_override=p.get("vlm_model"))
+    if not (description or "").strip() or (description or "").startswith("[VLM description unavailable"):
+        raise RuntimeError(description or "VLM did not return an image description.")
+    q.update_progress(job.id, step="extracting facts", progress=0.55)
+    extraction = ingest_agent.extract_from_text(
+        f"image/{p['kind']}", p["title"], description,
+        model_override=p.get("text_model") or p.get("vlm_model"),
+    )
+    used_fallback = False
+    if not (extraction.get("units") or extraction.get("entities") or extraction.get("relationships")):
+        extraction = _fallback_extract_from_document(f"image/{p['kind']}", p["title"], description)
+        used_fallback = True
+    q.update_progress(job.id, step="reconciling + storing", progress=0.85)
+    source_id = str(uuid.uuid4())[:8]
+    now = _utc_now_iso()
+    source = {
+        "id": source_id, "kind": p["kind"], "title": p["title"],
+        "content": description, "url": p.get("url"), "capturedAt": now,
+        "imageIngested": True, "imageFilename": p.get("filename"),
+        "extractionMode": "fallback" if used_fallback else "model",
+    }
+    result = struct_agent.embed_and_store(
+        source_id=source_id, source=source,
+        units=extraction.get("units", []),
+        entities=extraction.get("entities", []),
+        relationships=extraction.get("relationships", []),
+        raw_chunks=[description],
+    )
+    return {
+        "source_id": source_id, "vlm_description_chars": len(description),
+        "units_extracted": len(extraction.get("units", [])),
+        "entities_extracted": len(extraction.get("entities", [])),
+        "relationships_extracted": len(extraction.get("relationships", [])),
+        "fallback_extraction": used_fallback,
+        **result,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Request models
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -2491,66 +2880,23 @@ def health_check():
 
 @app.post("/api/ingest")
 def ingest_text(req: IngestRequest):
-    request_t0 = time.time()
+    """Enqueue a text ingest job. Returns immediately with a job_id; subscribe
+    to /api/jobs/stream for progress."""
     title = req.title or (req.content.strip().splitlines()[0][:80] if req.content.strip() else f"Untitled {req.kind}")
     _debug_event(
-        "ingest.text.start",
-        "Received text ingestion request",
-        title=title,
-        kind=req.kind,
-        url=req.url,
-        model=req.model,
-        chars=len(req.content),
+        "ingest.text.enqueue", "Queued text ingestion job",
+        title=title, kind=req.kind, url=req.url, model=req.model, chars=len(req.content),
     )
-    source_id = str(uuid.uuid4())[:8]
-    now = _utc_now_iso()
-    _debug_event(
-        "ingest.text.source",
-        "Created source record",
-        source_id=source_id,
+    job = job_queue.submit(
+        kind="ingest_text", title=title, handler=_handler_ingest_text,
+        payload={"kind": req.kind, "title": title, "content": req.content,
+                 "url": req.url, "model": req.model},
     )
-
-    extraction = ingest_agent.extract_from_text(
-        req.kind, title, req.content, model_override=req.model,
-    )
-
-    source = {
-        "id": source_id,
-        "kind": req.kind,
-        "title": title,
-        "content": req.content,
-        "url": req.url,
-        "capturedAt": now,
-    }
-
-    result = struct_agent.embed_and_store(
-        source_id=source_id,
-        source=source,
-        units=extraction.get("units", []),
-        entities=extraction.get("entities", []),
-        relationships=extraction.get("relationships", []),
-        raw_chunks=_chunk_text(req.content, max_chars=_MAX_EXTRACTION_CHARS),
-    )
-    _debug_event(
-        "ingest.text.done",
-        "Text ingestion complete",
-        source_id=source_id,
-        elapsed_ms=int((time.time() - request_t0) * 1000),
-        units_extracted=len(extraction.get("units", [])),
-        entities_extracted=len(extraction.get("entities", [])),
-        relationships_extracted=len(extraction.get("relationships", [])),
-        units_stored=result.get("units_stored"),
-        entities_stored=result.get("entities_stored"),
-        relationships_stored=result.get("relationships_stored"),
-    )
-
     return {
-        "message": "Ingested and structured via 70B model + ChromaDB.",
-        "source_id": source_id,
-        "units_extracted": len(extraction.get("units", [])),
-        "entities_extracted": len(extraction.get("entities", [])),
-        "relationships_extracted": len(extraction.get("relationships", [])),
-        **result,
+        "job_id": job.id,
+        "status": "queued",
+        "queue_position": job_queue.queue_position(job.id),
+        "title": title,
     }
 
 
@@ -2873,163 +3219,27 @@ async def ingest_file(
     model: Optional[str] = Form(None),
     file: UploadFile = File(...),
 ):
-    """
-    File upload pipeline:
-      PDF/DOC/DOCX/TXT/MD/CSV → text extraction → 70B extraction → ChromaDB → brain.json
-    """
-    request_t0 = time.time()
+    """Enqueue a file ingest job. We read the bytes now (so the UploadFile
+    handle stays valid) then return immediately with a job_id."""
     data = await file.read()
     filename = file.filename or "upload"
     if not title:
         title = filename.rsplit(".", 1)[0] or filename
     _debug_event(
-        "ingest.file.start",
-        "Received file ingestion request",
-        title=title,
-        kind=kind,
-        url=url,
-        model=model,
-        filename=file.filename,
-        content_type=file.content_type,
+        "ingest.file.enqueue", "Queued file ingestion job",
+        title=title, kind=kind, url=url, model=model,
+        filename=file.filename, content_type=file.content_type, bytes=len(data),
     )
-    _debug_event(
-        "ingest.file.read",
-        "Uploaded file bytes read",
-        filename=filename,
-        bytes=len(data),
+    job = job_queue.submit(
+        kind="ingest_file", title=title, handler=_handler_ingest_file,
+        payload={"kind": kind, "title": title, "url": url, "model": model,
+                 "filename": filename, "data": data},
     )
-    text = _extract_file_text(filename, data)
-
-    if (
-        not text.strip()
-        or text.startswith("[PDF has no selectable")
-        or text.startswith("[PDF extraction failed")
-        or text.startswith("[DOC extraction failed")
-        or text.startswith("[DOCX extraction failed")
-    ):
-        _debug_event(
-            "ingest.file.reject",
-            "File did not produce ingestible text",
-            filename=filename,
-            detail=text,
-        )
-        raise HTTPException(status_code=422, detail=text if text.startswith("[") else "Could not extract any text from the file.")
-
-    source_id = str(uuid.uuid4())[:8]
-    now = _utc_now_iso()
-    _debug_event(
-        "ingest.file.source",
-        "Created source record",
-        source_id=source_id,
-        filename=filename,
-        chars=len(text),
-    )
-
-    # Chunk large documents so each LLM call fits inside the context window,
-    # then merge all extracted units + entities across chunks.
-    chunks = _chunk_text(text, max_chars=_MAX_EXTRACTION_CHARS)
-    _debug_event(
-        "ingest.file.chunks",
-        "Top-level file chunking complete",
-        source_id=source_id,
-        chunks=len(chunks),
-        max_chars=_MAX_EXTRACTION_CHARS,
-        chunk_chars=",".join(str(len(chunk)) for chunk in chunks),
-    )
-    all_units: list[dict] = []
-    all_entities: list[dict] = []
-    all_relationships: list[dict] = []
-    for idx, chunk in enumerate(chunks, start=1):
-        _debug_event(
-            "ingest.file.chunk.start",
-            "Processing file chunk",
-            source_id=source_id,
-            chunk=idx,
-            total_chunks=len(chunks),
-            chars=len(chunk),
-        )
-        extraction = ingest_agent.extract_from_text(
-            source_type=kind,
-            title=title,
-            content=chunk,
-            model_override=model,
-        )
-        chunk_units = extraction.get("units", [])
-        chunk_entities = extraction.get("entities", [])
-        chunk_relationships = extraction.get("relationships", [])
-        _debug_event(
-            "ingest.file.chunk.done",
-            "File chunk extraction complete",
-            source_id=source_id,
-            chunk=idx,
-            units=len(chunk_units),
-            entities=len(chunk_entities),
-            relationships=len(chunk_relationships),
-        )
-        all_units.extend(chunk_units)
-        all_entities.extend(chunk_entities)
-        all_relationships.extend(chunk_relationships)
-
-    used_fallback_extraction = False
-    if not (all_units or all_entities or all_relationships):
-        _debug_event(
-            "ingest.file.fallback",
-            "Model returned no structured data for readable file; using fallback document extractor",
-            source_id=source_id,
-            filename=filename,
-            chars=len(text),
-        )
-        fallback = _fallback_extract_from_document(kind, title, text)
-        all_units = fallback.get("units", [])
-        all_entities = fallback.get("entities", [])
-        all_relationships = fallback.get("relationships", [])
-        used_fallback_extraction = True
-
-    source = {
-        "id": source_id,
-        "kind": kind,
-        "title": title,
-        "content": text[:2000],  # store a preview, not the full text
-        "url": url,
-        "capturedAt": now,
-        "uploadedFilename": filename,
-        "charCount": len(text),
-        "chunkCount": len(chunks),
-        "extractionMode": "fallback" if used_fallback_extraction else "model",
-    }
-
-    result = struct_agent.embed_and_store(
-        source_id=source_id,
-        source=source,
-        units=all_units,
-        entities=all_entities,
-        relationships=all_relationships,
-        raw_chunks=chunks,
-    )
-    _debug_event(
-        "ingest.file.done",
-        "File ingestion complete",
-        source_id=source_id,
-        filename=filename,
-        elapsed_ms=int((time.time() - request_t0) * 1000),
-        units_extracted=len(all_units),
-        entities_extracted=len(all_entities),
-        relationships_extracted=len(all_relationships),
-        units_stored=result.get("units_stored"),
-        entities_stored=result.get("entities_stored"),
-        relationships_stored=result.get("relationships_stored"),
-    )
-
     return {
-        "message": f"File '{filename}' ingested ({len(chunks)} chunk(s)).",
-        "chars_extracted": len(text),
-        "chunks_processed": len(chunks),
-        "source_id": source_id,
-        "units_extracted": len(all_units),
-        "entities_extracted": len(all_entities),
-        "relationships_extracted": len(all_relationships),
-        "fallback_extraction": used_fallback_extraction,
-        **result,
+        "job_id": job.id,
+        "status": "queued",
+        "queue_position": job_queue.queue_position(job.id),
+        "title": title,
     }
 
 
@@ -3038,131 +3248,32 @@ async def ingest_image(
     title: Optional[str] = Form(None),
     kind: str = Form("doc"),
     url: Optional[str] = Form(None),
-    model: Optional[str] = Form(None),  # used as VLM model override
-    text_model: Optional[str] = Form(None),  # used as extraction model override
+    model: Optional[str] = Form(None),       # VLM model override
+    text_model: Optional[str] = Form(None),  # extraction model override
     file: UploadFile = File(...),
 ):
-    """
-    VLM pipeline:
-      image → VLM description → 70B extraction → ChromaDB embedding → brain.json
-    """
-    request_t0 = time.time()
+    """Enqueue an image ingest job (VLM → extraction → store)."""
     image_data = await file.read()
     mime = file.content_type or "image/png"
     if not title:
         fname = file.filename or "image"
         title = fname.rsplit(".", 1)[0] or fname
     _debug_event(
-        "ingest.image.start",
-        "Received image ingestion request",
-        title=title,
-        kind=kind,
-        url=url,
-        vlm_model=model,
-        text_model=text_model,
-        filename=file.filename,
-        content_type=file.content_type,
+        "ingest.image.enqueue", "Queued image ingestion job",
+        title=title, kind=kind, url=url, vlm_model=model, text_model=text_model,
+        filename=file.filename, content_type=file.content_type, bytes=len(image_data),
     )
-    _debug_event(
-        "ingest.image.read",
-        "Uploaded image bytes read",
-        filename=file.filename,
-        mime=mime,
-        bytes=len(image_data),
+    job = job_queue.submit(
+        kind="ingest_image", title=title, handler=_handler_ingest_image,
+        payload={"kind": kind, "title": title, "url": url, "filename": file.filename,
+                 "data": image_data, "mime": mime,
+                 "vlm_model": model, "text_model": text_model},
     )
-
-    # Step 1: VLM converts image to text
-    description = ingest_agent.describe_image(image_data, mime, model_override=model)
-    _debug_event(
-        "ingest.image.description",
-        "Image description ready for text extraction",
-        chars=len(description or ""),
-        preview=description or "",
-    )
-    if not (description or "").strip() or (description or "").startswith("[VLM description unavailable"):
-        _debug_event(
-            "ingest.image.reject",
-            "VLM did not produce an ingestible description",
-            filename=file.filename,
-            detail=description,
-        )
-        raise HTTPException(status_code=502, detail=description or "VLM did not return an image description.")
-
-    source_id = str(uuid.uuid4())[:8]
-    now = _utc_now_iso()
-    _debug_event(
-        "ingest.image.source",
-        "Created source record",
-        source_id=source_id,
-        filename=file.filename,
-    )
-
-    # Step 2: 70B model extracts entities + knowledge units from the description
-    extraction = ingest_agent.extract_from_text(
-        source_type=f"image/{kind}",
-        title=title,
-        content=description,
-        model_override=text_model or model,
-    )
-    used_fallback_extraction = False
-    if not (
-        extraction.get("units")
-        or extraction.get("entities")
-        or extraction.get("relationships")
-    ):
-        _debug_event(
-            "ingest.image.fallback",
-            "Model returned no structured data for VLM description; using fallback document extractor",
-            source_id=source_id,
-            filename=file.filename,
-            description_chars=len(description or ""),
-        )
-        extraction = _fallback_extract_from_document(f"image/{kind}", title, description)
-        used_fallback_extraction = True
-
-    source = {
-        "id": source_id,
-        "kind": kind,
-        "title": title,
-        "content": description,
-        "url": url,
-        "capturedAt": now,
-        "imageIngested": True,
-        "imageFilename": file.filename,
-        "extractionMode": "fallback" if used_fallback_extraction else "model",
-    }
-
-    result = struct_agent.embed_and_store(
-        source_id=source_id,
-        source=source,
-        units=extraction.get("units", []),
-        entities=extraction.get("entities", []),
-        relationships=extraction.get("relationships", []),
-        raw_chunks=[description],
-    )
-    _debug_event(
-        "ingest.image.done",
-        "Image ingestion complete",
-        source_id=source_id,
-        elapsed_ms=int((time.time() - request_t0) * 1000),
-        description_chars=len(description or ""),
-        units_extracted=len(extraction.get("units", [])),
-        entities_extracted=len(extraction.get("entities", [])),
-        relationships_extracted=len(extraction.get("relationships", [])),
-        units_stored=result.get("units_stored"),
-        entities_stored=result.get("entities_stored"),
-        relationships_stored=result.get("relationships_stored"),
-    )
-
     return {
-        "message": "Image ingested via VLM → 70B extraction → ChromaDB.",
-        "vlm_description_chars": len(description),
-        "source_id": source_id,
-        "units_extracted": len(extraction.get("units", [])),
-        "entities_extracted": len(extraction.get("entities", [])),
-        "relationships_extracted": len(extraction.get("relationships", [])),
-        "fallback_extraction": used_fallback_extraction,
-        **result,
+        "job_id": job.id,
+        "status": "queued",
+        "queue_position": job_queue.queue_position(job.id),
+        "title": title,
     }
 
 
@@ -3660,6 +3771,63 @@ def clear_all():
     _build_indexes(empty_state)
 
     return {"ok": True, "cleared": True, "removed": removed}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Job queue HTTP endpoints
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/jobs")
+def list_jobs():
+    """Return {active, queued[], recent[]}. Cheap; safe to call every few seconds
+    as a fallback if SSE isn't available."""
+    return job_queue.snapshot()
+
+
+@app.get("/api/jobs/stream")
+def stream_jobs():
+    """Server-Sent Events stream of job lifecycle events. The UI dock subscribes
+    via EventSource. Sends an initial snapshot, then live deltas, with a 15s
+    heartbeat so reverse proxies don't time the connection out."""
+    listener = job_queue.listen()
+
+    def gen():
+        try:
+            yield f"data: {json.dumps({'event': 'snapshot', 'snapshot': job_queue.snapshot()})}\n\n"
+            while True:
+                try:
+                    msg = listener.get(timeout=15)
+                    yield f"data: {json.dumps(msg)}\n\n"
+                except _stdlib_queue.Empty:
+                    yield ": keepalive\n\n"
+        finally:
+            job_queue.unlisten(listener)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # tell nginx not to buffer SSE
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job_status(job_id: str):
+    j = job_queue.get(job_id)
+    if not j:
+        raise HTTPException(status_code=404, detail="job not found")
+    return j
+
+
+@app.delete("/api/jobs/{job_id}")
+def cancel_job(job_id: str):
+    ok = job_queue.cancel(job_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail="job not cancelable (finished or unknown)")
+    return {"ok": True, "canceled": job_id}
 
 
 if __name__ == "__main__":

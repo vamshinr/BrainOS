@@ -1,5 +1,4 @@
 import { BACKEND_URL } from "@/lib/backend";
-import { unstable_cache } from "next/cache";
 import { revalidatePath } from "next/cache";
 import type { UnitKind, EntityKind, Department, TemporalStatus } from "./types";
 
@@ -69,14 +68,17 @@ export interface State {
   }[];
 }
 
-const CACHE_TAG = "brain-state";
 const BACKEND = BACKEND_URL;
 
-async function fetchState(): Promise<State> {
+// Read brain state directly from the Python backend on every call. We
+// deliberately don't cache here — brain.json lives on the same VM as the
+// backend, the fetch is microseconds, and caching introduced a live-refresh
+// bug after job-queue ingest where the home page would show stale Recent
+// Knowledge until a hard reload. Force-dynamic pages already prevent route
+// segment caching; this keeps the data layer fresh too.
+export async function readState(): Promise<State> {
   try {
-    const res = await fetch(`${BACKEND}/api/state`, {
-      next: { tags: [CACHE_TAG] },
-    });
+    const res = await fetch(`${BACKEND}/api/state`, { cache: "no-store" });
     if (!res.ok) throw new Error(`Backend ${res.status}`);
     return res.json();
   } catch {
@@ -84,9 +86,9 @@ async function fetchState(): Promise<State> {
   }
 }
 
-export const readState = unstable_cache(fetchState, ["brain-state"]);
-
 export function invalidateCache() {
+  // No data-layer cache to bust, but we still revalidate the route segment
+  // so any client components subscribed to it pick up the fresh render.
   revalidatePath("/", "layout");
 }
 

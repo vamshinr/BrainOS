@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { useRouter } from "next/navigation";
 import { ModelPicker } from "@/components/model-picker";
 
 const KINDS = [
@@ -17,21 +16,15 @@ const KINDS = [
 
 type KindValue = (typeof KINDS)[number]["value"];
 
-type Result = {
-  sourceId: string;
-  addedUnits: number;
-  addedEntities: number;
-  addedRelationships?: number;
-  supersededUnits?: number;
-  charsExtracted?: number;
-  vlmDescriptionChars?: number;
-  totals: { sources: number; entities: number; units: number; relationships?: number };
+type Queued = {
+  jobId: string;
+  title: string;
+  queuePosition: number;
 };
 
 type Tab = "text" | "file" | "image";
 
 export default function IngestPage() {
-  const router = useRouter();
   const [tab, setTab] = useState<Tab>("text");
 
   // Text form state
@@ -57,7 +50,7 @@ export default function IngestPage() {
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [result, setResult] = useState<Result | null>(null);
+  const [queued, setQueued] = useState<Queued | null>(null);
 
   // Optional per-request model overrides. Empty string = "Auto".
   const [textModel, setTextModel] = useState("");        // text + file extraction
@@ -76,11 +69,23 @@ export default function IngestPage() {
     }
   }
 
+  // Read {job_id, title, queue_position} from the enqueue response and turn
+  // it into our Queued shape. The actual processing happens asynchronously —
+  // the QueueDock at the bottom-right shows live progress.
+  function readQueued(j: { job_id?: string; title?: string; queue_position?: number; error?: string }): Queued {
+    if (!j.job_id) throw new Error(j.error ?? "Enqueue failed");
+    return {
+      jobId: j.job_id,
+      title: j.title ?? "Untitled",
+      queuePosition: j.queue_position ?? 0,
+    };
+  }
+
   async function submitFile(e: React.FormEvent) {
     e.preventDefault();
     if (!uploadFile) return;
     setErr(null);
-    setResult(null);
+    setQueued(null);
     setLoading(true);
     try {
       const fd = new FormData();
@@ -93,12 +98,11 @@ export default function IngestPage() {
       const res = await fetch("/api/ingest-file", { method: "POST", body: fd });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
-      setResult(j);
+      setQueued(readQueued(j));
       setFileTitle("");
       setUploadFile(null);
       setFileUrl("");
       if (fileInputRef.current) fileInputRef.current.value = "";
-      router.refresh();
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));
     } finally {
@@ -109,7 +113,7 @@ export default function IngestPage() {
   async function submitText(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
-    setResult(null);
+    setQueued(null);
     setLoading(true);
     try {
       const res = await fetch("/api/ingest", {
@@ -124,11 +128,10 @@ export default function IngestPage() {
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
-      setResult(j);
+      setQueued(readQueued(j));
       setTitle("");
       setContent("");
       setUrl("");
-      router.refresh();
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));
     } finally {
@@ -140,7 +143,7 @@ export default function IngestPage() {
     e.preventDefault();
     if (!imgFile) return;
     setErr(null);
-    setResult(null);
+    setQueued(null);
     setLoading(true);
     try {
       const fd = new FormData();
@@ -154,13 +157,12 @@ export default function IngestPage() {
       const res = await fetch("/api/ingest-image", { method: "POST", body: fd });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
-      setResult(j);
+      setQueued(readQueued(j));
       setImgTitle("");
       setImgFile(null);
       setImgPreview(null);
       setImgUrl("");
       if (imgInputRef.current) imgInputRef.current.value = "";
-      router.refresh();
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));
     } finally {
@@ -191,7 +193,7 @@ export default function IngestPage() {
         ] as { id: Tab; label: string }[]).map((t) => (
           <button
             key={t.id}
-            onClick={() => { setTab(t.id); setErr(null); setResult(null); }}
+            onClick={() => { setTab(t.id); setErr(null); setQueued(null); }}
             className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${
               tab === t.id
                 ? "bg-[var(--foreground)] text-[var(--background)]"
@@ -417,36 +419,15 @@ export default function IngestPage() {
         </div>
       )}
 
-      {result && (
+      {queued && (
         <div className="mt-6 rounded-md border border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800 px-4 py-3 text-sm">
           <div className="font-medium">
-            Extracted {result.addedUnits} knowledge units
-            {result.addedEntities > 0 && `, ${result.addedEntities} entities`}
-            {(result.addedRelationships ?? 0) > 0 && (
-              <span className="text-emerald-700 dark:text-emerald-400">
-                , {result.addedRelationships} graph edges
-              </span>
-            )}.
-            {(result.supersededUnits ?? 0) > 0 && (
-              <span className="ml-1 text-amber-700 dark:text-amber-400">
-                · {result.supersededUnits} superseded.
-              </span>
-            )}
-            {result.charsExtracted
-              ? ` ${result.charsExtracted.toLocaleString()} chars from file.`
-              : ""}
-            {result.vlmDescriptionChars
-              ? ` VLM → ${result.vlmDescriptionChars} chars description.`
-              : ""}
+            Queued: <span className="font-normal">{queued.title}</span>
           </div>
-          <div className="text-xs text-[var(--muted-foreground)] mt-1.5 flex items-center gap-3">
-            <span>
-              Brain: {result.totals.units} units · {result.totals.entities} entities
-              {(result.totals.relationships ?? 0) > 0 && ` · ${result.totals.relationships} relationships`}
-              {" "}from {result.totals.sources} sources
-            </span>
-            <a className="underline" href="/graph">View graph →</a>
-            <a className="underline" href="/">Dashboard →</a>
+          <div className="text-xs text-[var(--muted-foreground)] mt-1.5">
+            {queued.queuePosition <= 1
+              ? "Starting now — watch the dock in the bottom-right for live progress."
+              : `Position #${queued.queuePosition} in the queue. The dock in the bottom-right will update when it starts.`}
           </div>
         </div>
       )}
@@ -481,11 +462,11 @@ function SubmitRow({
         disabled={loading || disabled}
         className="rounded-md bg-[var(--foreground)] text-[var(--background)] px-4 py-2 text-sm font-medium disabled:opacity-50"
       >
-        {loading ? "Processing on AMD MI300X…" : label}
+        {loading ? "Queuing…" : label}
       </button>
       {loading && (
         <span className="text-xs text-[var(--muted-foreground)]">
-          Calling 70B model, embedding into ChromaDB…
+          Enqueueing job — progress shows up in the bottom-right dock.
         </span>
       )}
     </div>
