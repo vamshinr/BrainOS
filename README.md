@@ -4,7 +4,7 @@
 
 # Company Brain — BrainOS
 
-> **Live demo:** [http://129.212.176.117:3000/](http://129.212.176.117:3000/)
+> **Live demo:** [http://34.171.7.162:3000/](http://129.212.176.117:3000/)
 > Backend on AMD MI300X via vLLM. May go offline outside hackathon hours — see the [60-second demo](#the-60-second-demo) and walkthrough video for a guaranteed view.
 
 ---
