@@ -3,27 +3,7 @@ import { readState } from "@/lib/store";
 import { formatDate } from "@/lib/utils";
 import { ResetButton } from "@/components/reset-button";
 import { GapAnalysisButton } from "@/components/gap-analysis-button";
-import type { UnitKind } from "@/lib/types";
-
-const KIND_LABELS: Record<UnitKind, string> = {
-  fact: "fact",
-  process: "process",
-  decision: "decision",
-  ownership: "ownership",
-  definition: "definition",
-  policy: "policy",
-  gotcha: "gotcha",
-};
-
-const KIND_TINT: Record<UnitKind, string> = {
-  fact: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
-  process: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300",
-  decision: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300",
-  ownership: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300",
-  definition: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
-  policy: "bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300",
-  gotcha: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300",
-};
+import { KnowledgeFeed } from "@/components/knowledge-feed";
 
 export const dynamic = "force-dynamic";
 
@@ -36,85 +16,38 @@ export default async function Home() {
     return <FirstRunLanding />;
   }
 
-  const byKind = fresh.reduce<Record<string, number>>((acc, u) => {
-    acc[u.kind] = (acc[u.kind] ?? 0) + 1;
-    return acc;
-  }, {});
-
-  const recentUnits = fresh.slice(0, 12);
+  const disputedCount = fresh.filter((u) => u.disputed).length;
 
   return (
-    <div className="px-10 py-10 max-w-6xl">
-      <div className="grid grid-cols-[1fr_280px] gap-8">
+    <div className="px-10 py-8 max-w-6xl">
+      <div className="grid grid-cols-[1fr_260px] gap-8">
         <div className="min-w-0">
-          <header className="mb-10">
-            <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
-              Brain OS
+          <header className="mb-5 flex items-end justify-between gap-4 flex-wrap">
+            <div>
+              <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-1">
+                Brain OS · Workspace
+              </div>
+              <h1 className="text-2xl font-semibold tracking-tight">
+                Your agent&apos;s memory.
+              </h1>
             </div>
-            <h1 className="text-4xl font-semibold tracking-tight">
-              Reconciled memory for your AI agents.
-            </h1>
-            <p className="mt-2 text-lg text-[var(--foreground)]/80 max-w-2xl">
-              Stop stuffing your agent&apos;s prompt with noisy RAG chunks.
-            </p>
-            <p className="mt-3 text-[var(--muted-foreground)] max-w-2xl">
-              Atomic, attributable facts extracted from Slack, email, tickets and
-              docs. Superseded when things change. Loaded into your agent with
-              provenance on every claim — not chunked, not stuffed into a prompt,
-              not regenerated on every call.
-            </p>
+            <InlineStats
+              units={fresh.length}
+              sources={state.sources.length}
+              entities={state.entities.length}
+              disputed={disputedCount}
+            />
           </header>
 
-          <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-8">
-            <Stat label="Sources" value={state.sources.length} />
-            <Stat label="Entities" value={state.entities.length} />
-            <Stat label="Relationships" value={(state.relationships ?? []).length} accent />
-            <Stat label="Knowledge units" value={fresh.length} />
-            <Stat
-              label="Superseded"
-              value={state.units.length - fresh.length}
-              muted
-            />
-          </section>
+          <div className="flex flex-wrap items-center gap-2 mb-6">
+            <ActionPill href="/ingest" label="+ Ingest" primary />
+            <ActionPill href="/ask" label="Ask" />
+            <ActionPill href="/failures" label="Traps" />
+            <ActionPill href="/graph" label="Map" />
+            <ActionPill href="/skills" label="Export SKILLS.md" />
+          </div>
 
-          <SectionTitle>Recent knowledge</SectionTitle>
-          <ul className="space-y-2">
-            {recentUnits.map((u) => (
-              <li
-                key={u.id}
-                className="rounded-lg border bg-[var(--card)] px-4 py-3 hover:border-[var(--accent)]/40 transition-colors"
-              >
-                <div className="flex items-start gap-3">
-                  <span
-                    className={`mt-0.5 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${KIND_TINT[u.kind]}`}
-                  >
-                    {KIND_LABELS[u.kind]}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start gap-2">
-                      <div className="text-sm leading-snug flex-1">{u.statement}</div>
-                      {u.disputed && (
-                        <span
-                          title={`Conflicts with ${u.conflictsWith?.length ?? 0} other unit(s) — click to resolve`}
-                          className="shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300 border border-red-200 dark:border-red-800"
-                        >
-                          <span className="size-1.5 rounded-full bg-red-500 inline-block animate-pulse" />
-                          Disputed
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-1.5 flex items-center gap-2 text-[11px] text-[var(--muted-foreground)]">
-                      <span>subject: {u.subject}</span>
-                      <span>·</span>
-                      <span>conf {u.confidence.toFixed(2)}</span>
-                      <span>·</span>
-                      <span>{formatDate(u.createdAt)}</span>
-                    </div>
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
+          <KnowledgeFeed units={fresh} />
         </div>
 
         <aside className="space-y-6 sticky top-6 self-start max-h-[calc(100vh-3rem)] overflow-y-auto pr-1">
@@ -141,27 +74,6 @@ export default async function Home() {
           </div>
 
           <div className="pt-4 border-t border-[var(--border)]">
-            <SectionTitle>By kind</SectionTitle>
-            <div className="space-y-1">
-              {(Object.keys(KIND_LABELS) as UnitKind[]).map((k) => (
-                <div
-                  key={k}
-                  className="flex items-center justify-between text-sm"
-                >
-                  <span
-                    className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${KIND_TINT[k]}`}
-                  >
-                    {KIND_LABELS[k]}
-                  </span>
-                  <span className="font-mono text-xs text-[var(--muted-foreground)]">
-                    {byKind[k] ?? 0}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div>
             <SectionTitle>Sources</SectionTitle>
             {state.sources.length === 0 ? (
               <p className="text-xs text-[var(--muted-foreground)]">
@@ -183,6 +95,64 @@ export default async function Home() {
         </aside>
       </div>
     </div>
+  );
+}
+
+function InlineStats({
+  units,
+  sources,
+  entities,
+  disputed,
+}: {
+  units: number;
+  sources: number;
+  entities: number;
+  disputed: number;
+}) {
+  return (
+    <div className="flex items-center gap-3 text-sm">
+      <Pill label="units" value={units} />
+      <Pill label="sources" value={sources} />
+      <Pill label="entities" value={entities} />
+      {disputed > 0 && (
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 px-2.5 py-1 text-xs font-medium border border-red-200 dark:border-red-800">
+          <span className="size-1.5 rounded-full bg-red-500 inline-block animate-pulse" />
+          {disputed} disputed
+        </span>
+      )}
+    </div>
+  );
+}
+
+function Pill({ label, value }: { label: string; value: number }) {
+  return (
+    <span className="inline-flex items-baseline gap-1.5 rounded-full bg-[var(--card)] border border-[var(--border)] px-2.5 py-1 text-xs">
+      <span className="font-mono tabular-nums font-semibold">{value}</span>
+      <span className="text-[var(--muted-foreground)]">{label}</span>
+    </span>
+  );
+}
+
+function ActionPill({
+  href,
+  label,
+  primary,
+}: {
+  href: string;
+  label: string;
+  primary?: boolean;
+}) {
+  return (
+    <Link
+      href={href}
+      className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+        primary
+          ? "bg-[var(--foreground)] text-[var(--background)] hover:opacity-90"
+          : "border bg-[var(--card)] hover:border-[var(--accent)]/40"
+      }`}
+    >
+      {label}
+    </Link>
   );
 }
 
@@ -414,30 +384,6 @@ function NavCard({
   );
 }
 
-function Stat({
-  label,
-  value,
-  accent,
-  muted,
-}: {
-  label: string;
-  value: number;
-  accent?: boolean;
-  muted?: boolean;
-}) {
-  return (
-    <div className="rounded-lg border bg-[var(--card)] px-4 py-3">
-      <div className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)]">
-        {label}
-      </div>
-      <div
-        className={`mt-1 text-2xl font-semibold tabular-nums ${accent ? "text-[var(--accent)]" : muted ? "text-[var(--muted-foreground)]" : ""}`}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
