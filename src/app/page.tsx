@@ -316,6 +316,11 @@ function FirstRunLanding() {
             title="Ingest"
             body="Text, file uploads, and image ingestion (screenshots of whiteboards, slides, diagrams)."
           />
+          <NavCard
+            href="/failures"
+            title="Agent failures"
+            body="Paste a thrashing agent transcript. BrainOS extracts the loop as a durable gotcha and adds it to SKILLS.md so the next agent skips it."
+          />
         </div>
       </section>
 

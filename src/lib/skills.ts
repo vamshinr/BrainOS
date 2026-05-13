@@ -214,6 +214,20 @@ function quoteFor(unit: Unit): string | null {
   return quote ? escapeInline(quote).slice(0, 220) : null;
 }
 
+// True iff at least one evidence source of this unit was ingested as an agent
+// failure trace (title prefix "[agent-trap]"). These get hoisted into their own
+// SKILLS.md section so a future agent can scan known traps before retrying.
+function isAgentTrap(state: State, unit: Unit): boolean {
+  if (unit.kind !== "gotcha") return false;
+  const sources = sourceMapFor(state);
+  for (const ev of unit.evidence ?? []) {
+    if (!ev.sourceId) continue;
+    const src = sources.get(ev.sourceId);
+    if (src && src.title.startsWith("[agent-trap]")) return true;
+  }
+  return false;
+}
+
 // Returns the sector for a unit: trusts backend tag if set, else keyword-matches.
 export function classifySector(unit: Unit): string {
   if (unit.sector && unit.sector !== "General") return unit.sector;
@@ -579,9 +593,17 @@ export function generateSkills(state: State, department?: Department): string {
     lines.push(...renderGroupedUnits(state, "Ownership And Routing", deptUnits.filter((unit) => unit.kind === "ownership")));
     lines.push(...renderGroupedUnits(state, "Policies", deptUnits.filter((unit) => unit.kind === "policy")));
     lines.push(...renderGroupedUnits(state, "Processes", deptUnits.filter((unit) => unit.kind === "process")));
-    lines.push(...renderGroupedUnits(state, "Gotchas", deptUnits.filter((unit) => unit.kind === "gotcha")));
+    lines.push(...renderGroupedUnits(state, "Gotchas", deptUnits.filter((unit) => unit.kind === "gotcha" && !isAgentTrap(state, unit))));
     lines.push(...renderGroupedUnits(state, "Decisions", deptUnits.filter((unit) => unit.kind === "decision")));
     lines.push(...renderTemporalNotes(state, deptUnits));
+  }
+
+  // Cross-department section: durable lessons mined from agent failure
+  // transcripts. Listed near the top so an agent reading SKILLS.md hits them
+  // before trying any tool calls that previously thrashed.
+  const trapUnits = units.filter((unit) => isAgentTrap(state, unit));
+  if (trapUnits.length > 0) {
+    lines.push(...renderGroupedUnits(state, "Known Agent Traps", trapUnits));
   }
 
   lines.push(...renderAgentRules(units));
