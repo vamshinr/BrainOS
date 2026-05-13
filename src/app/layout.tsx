@@ -24,6 +24,7 @@ export const metadata: Metadata = {
 const NAV: { href: string; label: string; hint: string }[] = [
   { href: "/", label: "Brain", hint: "Overview" },
   { href: "/ingest", label: "Ingest", hint: "Capture knowledge" },
+  { href: "/failures", label: "Traps", hint: "Loop memory" },
   { href: "/graph", label: "Map", hint: "Entities & links" },
   { href: "/code", label: "Code", hint: "Codebase map · ownership · ADRs" },
   { href: "/ask", label: "Ask", hint: "Query the brain" },

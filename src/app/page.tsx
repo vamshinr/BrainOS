@@ -45,38 +45,38 @@ export default async function Home() {
 
   return (
     <div className="px-10 py-10 max-w-6xl">
-      <header className="mb-10">
-        <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
-          Brain OS
-        </div>
-        <h1 className="text-4xl font-semibold tracking-tight">
-          Reconciled memory for your AI agents.
-        </h1>
-        <p className="mt-2 text-lg text-[var(--foreground)]/80 max-w-2xl">
-          Stop stuffing your agent's prompt with noisy RAG chunks.
-        </p>
-        <p className="mt-3 text-[var(--muted-foreground)] max-w-2xl">
-          Atomic, attributable facts extracted from Slack, email, tickets and
-          docs. Superseded when things change. Loaded into your agent with
-          provenance on every claim — not chunked, not stuffed into a prompt,
-          not regenerated on every call.
-        </p>
-      </header>
+      <div className="grid grid-cols-[1fr_280px] gap-8">
+        <div className="min-w-0">
+          <header className="mb-10">
+            <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
+              Brain OS
+            </div>
+            <h1 className="text-4xl font-semibold tracking-tight">
+              Reconciled memory for your AI agents.
+            </h1>
+            <p className="mt-2 text-lg text-[var(--foreground)]/80 max-w-2xl">
+              Stop stuffing your agent&apos;s prompt with noisy RAG chunks.
+            </p>
+            <p className="mt-3 text-[var(--muted-foreground)] max-w-2xl">
+              Atomic, attributable facts extracted from Slack, email, tickets and
+              docs. Superseded when things change. Loaded into your agent with
+              provenance on every claim — not chunked, not stuffed into a prompt,
+              not regenerated on every call.
+            </p>
+          </header>
 
-      <section className="grid grid-cols-5 gap-3 mb-8">
-        <Stat label="Sources" value={state.sources.length} />
-        <Stat label="Entities" value={state.entities.length} />
-        <Stat label="Relationships" value={(state.relationships ?? []).length} accent />
-        <Stat label="Knowledge units" value={fresh.length} />
-        <Stat
-          label="Superseded"
-          value={state.units.length - fresh.length}
-          muted
-        />
-      </section>
+          <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-8">
+            <Stat label="Sources" value={state.sources.length} />
+            <Stat label="Entities" value={state.entities.length} />
+            <Stat label="Relationships" value={(state.relationships ?? []).length} accent />
+            <Stat label="Knowledge units" value={fresh.length} />
+            <Stat
+              label="Superseded"
+              value={state.units.length - fresh.length}
+              muted
+            />
+          </section>
 
-      <section className="grid grid-cols-[1fr_280px] gap-8 mb-12">
-        <div>
           <SectionTitle>Recent knowledge</SectionTitle>
           <ul className="space-y-2">
             {recentUnits.map((u) => (
@@ -117,8 +117,30 @@ export default async function Home() {
           </ul>
         </div>
 
-        <aside className="space-y-6">
-          <div>
+        <aside className="space-y-6 sticky top-6 self-start max-h-[calc(100vh-3rem)] overflow-y-auto pr-1">
+          <div className="flex flex-col gap-2">
+            <Link
+              href="/ingest"
+              className="text-sm text-center rounded-md bg-[var(--foreground)] text-[var(--background)] px-3 py-2 hover:opacity-90"
+            >
+              + Add knowledge
+            </Link>
+            <GapAnalysisButton />
+            <Link
+              href="/failures"
+              className="text-sm text-center rounded-md border bg-[var(--card)] px-3 py-2 hover:border-[var(--accent)]/40 transition-colors"
+            >
+              Agent traps · Loop memory
+            </Link>
+            <div className="flex items-center justify-between pt-1">
+              <Link href="/skills" className="text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)] underline underline-offset-2">
+                Export SKILLS.md →
+              </Link>
+              <ResetButton />
+            </div>
+          </div>
+
+          <div className="pt-4 border-t border-[var(--border)]">
             <SectionTitle>By kind</SectionTitle>
             <div className="space-y-1">
               {(Object.keys(KIND_LABELS) as UnitKind[]).map((k) => (
@@ -158,24 +180,8 @@ export default async function Home() {
               </ul>
             )}
           </div>
-
-          <div className="pt-4 border-t border-[var(--border)] flex flex-col gap-2">
-            <Link
-              href="/ingest"
-              className="text-sm text-center rounded-md bg-[var(--foreground)] text-[var(--background)] px-3 py-2 hover:opacity-90"
-            >
-              + Add knowledge
-            </Link>
-            <GapAnalysisButton />
-            <div className="flex items-center justify-between pt-1">
-              <Link href="/skills" className="text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)] underline underline-offset-2">
-                Export SKILLS.md →
-              </Link>
-              <ResetButton />
-            </div>
-          </div>
         </aside>
-      </section>
+      </div>
     </div>
   );
 }
@@ -318,7 +324,7 @@ function FirstRunLanding() {
           />
           <NavCard
             href="/failures"
-            title="Agent failures"
+            title="Agent traps · Loop memory"
             body="Paste a thrashing agent transcript. BrainOS extracts the loop as a durable gotcha and adds it to SKILLS.md so the next agent skips it."
           />
         </div>
