@@ -205,7 +205,7 @@ export default function IngestPage() {
   }
 
   return (
-    <div className="px-10 py-10 max-w-3xl">
+    <div className="px-4 sm:px-6 md:px-10 py-6 md:py-10 max-w-3xl">
       <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
         Ingest
       </div>
@@ -243,7 +243,7 @@ export default function IngestPage() {
       {/* ── Text form ── */}
       {tab === "text" && (
         <form onSubmit={submitText} className="mt-8 space-y-4">
-          <div className="grid grid-cols-[160px_1fr] gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">
             <Field label="Source type">
               <select
                 value={kind}
@@ -305,7 +305,7 @@ export default function IngestPage() {
             The 70B model on the AMD MI300X extracts knowledge units and reconciles them against what the brain already knows.
           </div>
 
-          <div className="grid grid-cols-[160px_1fr] gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">
             <Field label="Source type">
               <select
                 value={fileKind}
@@ -374,7 +374,7 @@ export default function IngestPage() {
             knowledge units. Both run on the AMD MI300X.
           </div>
 
-          <div className="grid grid-cols-[160px_1fr] gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">
             <Field label="Source type">
               <select
                 value={imgKind}

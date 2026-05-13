@@ -19,7 +19,7 @@ export default async function SkillsPage() {
   }
 
   return (
-    <div className="px-10 py-10 max-w-5xl">
+    <div className="px-4 sm:px-6 md:px-10 py-6 md:py-10 max-w-5xl">
       <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
         Skills export
       </div>
@@ -53,7 +53,7 @@ export default async function SkillsPage() {
         <h2 className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-3">
           How to load this into an agent
         </h2>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <UsageCard
             title="Claude Code"
             badge="CLAUDE.md"

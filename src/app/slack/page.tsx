@@ -119,7 +119,7 @@ export default function SlackPage() {
   }
 
   return (
-    <div className="px-10 py-10 max-w-6xl">
+    <div className="px-4 sm:px-6 md:px-10 py-6 md:py-10 max-w-6xl">
       <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
         Slack MCP
       </div>
@@ -151,7 +151,7 @@ export default function SlackPage() {
         </pre>
       </section>
 
-      <div className="mt-6 grid grid-cols-2 gap-4">
+      <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <ControlCard title="Shared Slack Context">
           <LabeledInput label="Channel ID" value={channelId} onChange={setChannelId} placeholder="C1234567890" />
           <label className="block text-xs text-[var(--muted-foreground)]">

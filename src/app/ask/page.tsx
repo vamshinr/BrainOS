@@ -103,7 +103,7 @@ export default function AskPage() {
   }
 
   return (
-    <div className="px-10 py-10 max-w-3xl">
+    <div className="px-4 sm:px-6 md:px-10 py-6 md:py-10 max-w-3xl">
       <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
         Ask
       </div>

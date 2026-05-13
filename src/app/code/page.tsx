@@ -31,7 +31,7 @@ export default async function CodePage({ searchParams }: PageProps) {
   const selected = codeSources.find((s) => s.id === src);
   if (!selected) {
     return (
-      <div className="px-10 py-10 max-w-5xl">
+      <div className="px-4 sm:px-6 md:px-10 py-6 md:py-10 max-w-5xl">
         <p className="text-sm text-[var(--muted-foreground)]">
           Codebase <code className="font-mono">{src}</code> not found.{" "}
           <Link className="underline" href="/code">Back to list →</Link>
@@ -55,7 +55,7 @@ export default async function CodePage({ searchParams }: PageProps) {
 
 function EmptyState() {
   return (
-    <div className="px-10 py-10 max-w-3xl">
+    <div className="px-4 sm:px-6 md:px-10 py-6 md:py-10 max-w-3xl">
       <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
         Code
       </div>
@@ -86,7 +86,7 @@ function EmptyState() {
 
 function CodebaseList({ codeSources }: { codeSources: Source[] }) {
   return (
-    <div className="px-10 py-10 max-w-5xl">
+    <div className="px-4 sm:px-6 md:px-10 py-6 md:py-10 max-w-5xl">
       <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
         Code
       </div>
@@ -176,7 +176,7 @@ function CodebaseDetail({ source, units }: { source: Source; units: Unit[] }) {
   );
 
   return (
-    <div className="px-10 py-10 max-w-5xl">
+    <div className="px-4 sm:px-6 md:px-10 py-6 md:py-10 max-w-5xl">
       <div className="flex items-center gap-2 mb-2">
         <Link
           href="/code"
@@ -197,14 +197,14 @@ function CodebaseDetail({ source, units }: { source: Source; units: Unit[] }) {
       </p>
 
       {/* Stat row */}
-      <section className="grid grid-cols-5 gap-3 mt-6 mb-4">
+      <section className="grid grid-cols-1 sm:grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-6 mb-4">
         <Stat label="Files" value={cb.totalFiles} />
         <Stat label="Languages" value={Object.keys(cb.byLanguage).length} />
         <Stat label="Outlines built" value={cb.outlinesBuilt ?? 0} accent />
         <Stat label="Rationale extracted" value={cb.rationaleFilesExtracted ?? 0} />
         <Stat label="Ownership facts" value={ownershipUnits.length} />
       </section>
-      <section className="grid grid-cols-4 gap-3 mb-8">
+      <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 mb-8">
         <Stat label="Symbols indexed" value={Object.keys(cb.symbolIndex ?? {}).length} />
         <Stat label="Import edges" value={cb.importGraph?.stats.internalEdges ?? 0} />
         <Stat label="Call edges" value={cb.callEdges?.length ?? 0} />
@@ -253,7 +253,7 @@ function CodebaseDetail({ source, units }: { source: Source; units: Unit[] }) {
       {cb.importGraph && cb.importGraph.stats.internalEdges > 0 && (
         <section className="mb-10">
           <SectionTitle>Import graph</SectionTitle>
-          <div className="grid grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             <div>
               <div className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
                 Hubs (most imported-by)
@@ -299,7 +299,7 @@ function CodebaseDetail({ source, units }: { source: Source; units: Unit[] }) {
       )}
 
       {/* Languages + Top dirs */}
-      <section className="grid grid-cols-2 gap-6 mb-10">
+      <section className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-10">
         <Bucket title="By language" entries={cb.byLanguage} />
         <Bucket title="Top-level dirs" entries={cb.topLevelDirs} />
       </section>

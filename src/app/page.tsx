@@ -19,9 +19,9 @@ export default async function Home() {
   const disputedCount = fresh.filter((u) => u.disputed).length;
 
   return (
-    <div className="px-10 py-8 max-w-6xl">
-      <div className="grid grid-cols-[1fr_260px] gap-8">
-        <div className="min-w-0">
+    <div className="px-4 sm:px-6 md:px-10 py-6 md:py-8 max-w-6xl">
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_260px] gap-6 lg:gap-8">
+        <div className="min-w-0 order-1">
           <header className="mb-5 flex items-end justify-between gap-4 flex-wrap">
             <div>
               <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-1">
@@ -50,7 +50,7 @@ export default async function Home() {
           <KnowledgeFeed units={fresh} />
         </div>
 
-        <aside className="space-y-6 sticky top-6 self-start max-h-[calc(100vh-3rem)] overflow-y-auto pr-1">
+        <aside className="order-2 space-y-6 lg:sticky lg:top-6 lg:self-start lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto lg:pr-1">
           <div className="flex flex-col gap-2">
             <Link
               href="/ingest"
@@ -158,12 +158,12 @@ function ActionPill({
 
 function FirstRunLanding() {
   return (
-    <div className="px-10 py-12 max-w-5xl">
-      <header className="mb-10">
+    <div className="px-4 sm:px-6 md:px-10 py-8 md:py-12 max-w-5xl">
+      <header className="mb-8 md:mb-10">
         <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
           Brain OS · agent memory infrastructure
         </div>
-        <h1 className="text-4xl font-semibold tracking-tight leading-tight">
+        <h1 className="text-3xl md:text-4xl font-semibold tracking-tight leading-tight">
           The knowledge layer between scattered company data and AI agents.
         </h1>
         <p className="mt-3 text-lg text-[var(--foreground)]/80 max-w-2xl">
@@ -181,7 +181,7 @@ function FirstRunLanding() {
 
       <section className="mb-10">
         <SectionTitle>What it does</SectionTitle>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <FeatureCard
             title="Extract atomic facts"
             body="Not chunks. Every fact is a self-contained proposition with a source, a quote, a confidence, a timestamp — the unit format the agent-memory literature has converged on."
@@ -199,8 +199,8 @@ function FirstRunLanding() {
 
       <section className="mb-10">
         <SectionTitle>Why not just RAG?</SectionTitle>
-        <div className="rounded-lg border bg-[var(--card)] overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="rounded-lg border bg-[var(--card)] overflow-x-auto">
+          <table className="w-full min-w-[640px] text-sm">
             <thead>
               <tr className="border-b text-left text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
                 <th className="px-4 py-2.5 font-medium">&nbsp;</th>
@@ -271,7 +271,7 @@ function FirstRunLanding() {
 
       <section className="mb-12">
         <SectionTitle>Explore the rest</SectionTitle>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <NavCard
             href="/skills"
             title="Skills"
@@ -342,19 +342,21 @@ function Step({
   cta: { href: string; label: string };
 }) {
   return (
-    <li className="rounded-lg border bg-[var(--card)] px-5 py-4 flex items-start gap-4">
-      <div className="size-7 shrink-0 rounded-full bg-[var(--accent)]/15 text-[var(--accent)] grid place-items-center text-sm font-semibold">
-        {n}
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="text-sm font-semibold">{title}</div>
-        <p className="text-xs text-[var(--muted-foreground)] mt-1 leading-relaxed">
-          {body}
-        </p>
+    <li className="rounded-lg border bg-[var(--card)] px-5 py-4 flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4">
+      <div className="flex items-start gap-4 flex-1 min-w-0">
+        <div className="size-7 shrink-0 rounded-full bg-[var(--accent)]/15 text-[var(--accent)] grid place-items-center text-sm font-semibold">
+          {n}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold">{title}</div>
+          <p className="text-xs text-[var(--muted-foreground)] mt-1 leading-relaxed">
+            {body}
+          </p>
+        </div>
       </div>
       <Link
         href={cta.href}
-        className="shrink-0 text-xs rounded-md bg-[var(--foreground)] text-[var(--background)] px-3 py-2 hover:opacity-90"
+        className="shrink-0 self-start sm:self-auto text-xs rounded-md bg-[var(--foreground)] text-[var(--background)] px-3 py-2 hover:opacity-90"
       >
         {cta.label}
       </Link>

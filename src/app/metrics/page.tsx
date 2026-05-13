@@ -227,7 +227,7 @@ export default function MetricsPage() {
   }, []);
 
   return (
-    <div className="px-10 py-10 max-w-5xl">
+    <div className="px-4 sm:px-6 md:px-10 py-6 md:py-10 max-w-5xl">
       {/* Header */}
       <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
         GPU Metrics
@@ -273,7 +273,7 @@ export default function MetricsPage() {
           {/* ── GPU / vLLM ── */}
           <section>
             <SectionTitle>GPU · vLLM · {snapshot.gpu.backend}</SectionTitle>
-            <div className="grid grid-cols-4 gap-3 mb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 mb-4">
               <StatCard
                 label="Generation tok/s"
                 value={fmt(snapshot.gpu.tokens_per_sec_generation, 1)}
@@ -301,7 +301,7 @@ export default function MetricsPage() {
               />
             </div>
 
-            <div className="grid grid-cols-[1fr_220px] gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_220px] gap-4">
               {/* Throughput sparkline */}
               <div className="rounded-lg border bg-[var(--card)] px-4 py-3">
                 <div className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] mb-3">
@@ -355,7 +355,7 @@ export default function MetricsPage() {
           {/* ── RAG / ChromaDB ── */}
           <section>
             <SectionTitle>RAG · ChromaDB</SectionTitle>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <StatCard
                 label="Embedded units"
                 value={String(snapshot.rag.chroma_units)}
@@ -389,7 +389,7 @@ export default function MetricsPage() {
           <section>
             <SectionTitle>VLM · Vision Language Model</SectionTitle>
             <div className="rounded-lg border bg-[var(--card)] px-4 py-3">
-              <div className="grid grid-cols-2 gap-4 text-sm">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                 <div>
                   <div className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] mb-1">
                     Model

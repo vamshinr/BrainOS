@@ -100,7 +100,7 @@ export default function FailuresPage() {
   }
 
   return (
-    <div className="px-10 py-10 max-w-4xl">
+    <div className="px-4 sm:px-6 md:px-10 py-6 md:py-10 max-w-4xl">
       <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
         Agent failure memory
       </div>
@@ -116,7 +116,7 @@ export default function FailuresPage() {
         SKILLS.md — so the <em>next</em> agent skips the loop.
       </p>
 
-      <div className="mt-6 grid grid-cols-[1fr_220px] gap-3">
+      <div className="mt-6 grid grid-cols-1 md:grid-cols-[1fr_220px] gap-3">
         <label className="block">
           <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-1.5">
             Transcript (JSON array of tool calls, or pasted log)
