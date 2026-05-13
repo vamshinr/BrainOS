@@ -426,6 +426,113 @@ function renderRelationships(state: State, units: Unit[]): string[] {
   return lines;
 }
 
+// Render the Code Map section. Only emitted if at least one code source has
+// been ingested. Stays terse so it doesn't crowd out the operational facts.
+function renderCodeMap(state: State): string[] {
+  const codeSources = state.sources.filter((s) => s.kind === "code" && s.codebase);
+  if (codeSources.length === 0) return [];
+
+  const lines: string[] = ["## Code Map", ""];
+
+  for (const src of codeSources) {
+    const cb = src.codebase!;
+    const langs = Object.entries(cb.byLanguage)
+      .slice(0, 6)
+      .map(([k, v]) => `${k}:${v}`)
+      .join(", ");
+    const dirs = Object.entries(cb.topLevelDirs)
+      .slice(0, 8)
+      .map(([k, v]) => `${k} (${v})`)
+      .join(", ");
+
+    lines.push(`### ${src.title}`);
+    lines.push(
+      `- captured: ${src.capturedAt}`,
+      `- files: ${cb.totalFiles}${cb.truncated ? " (truncated)" : ""}`,
+      `- languages: ${langs}`,
+      `- top-level dirs: ${dirs}`,
+    );
+    if (cb.rationaleFilesExtracted != null) {
+      lines.push(`- rationale files extracted: ${cb.rationaleFilesExtracted}`);
+    }
+    lines.push("");
+
+    // Entity ↔ Path links — the bridge that lets the agent jump from a fact
+    // (e.g. "billing service was migrated") to the actual code location.
+    const ep = cb.entityPaths ?? {};
+    const epEntries = Object.entries(ep).slice(0, 40);
+    if (epEntries.length > 0) {
+      lines.push("**Entity → Path**", "");
+      for (const [entity, paths] of epEntries) {
+        const shown = paths.slice(0, 4).join(", ") +
+          (paths.length > 4 ? `, … (+${paths.length - 4} more)` : "");
+        lines.push(`- \`${entity}\` → ${shown}`);
+      }
+      lines.push("");
+    }
+
+    // Module summaries — LLM-generated "what this directory does" overviews.
+    // Useful as cheap orientation for an agent dropped into an unfamiliar repo.
+    const modules = cb.moduleSummaries ?? [];
+    if (modules.length > 0) {
+      lines.push("**Modules**", "");
+      for (const m of modules) {
+        lines.push(`- \`${m.dir}/\` (${m.fileCount} files) — ${m.summary}`);
+      }
+      lines.push("");
+    }
+
+    // Top symbols — first ~30 by name. Lets the agent answer "where is X
+    // defined?" without re-reading code.
+    const sIndex = cb.symbolIndex ?? {};
+    const sEntries = Object.entries(sIndex).slice(0, 30);
+    if (sEntries.length > 0) {
+      lines.push("**Top symbols → path**", "");
+      for (const [name, occ] of sEntries) {
+        const first = occ[0];
+        const more = occ.length > 1 ? ` (+${occ.length - 1} more defs)` : "";
+        lines.push(`- \`${name}\` (${first.kind}) — ${first.path}:${first.line}${more}`);
+      }
+      lines.push("");
+    }
+
+    // Import-graph hubs — files imported-by many others. Strong "central
+    // module" signal for the agent.
+    const ig = cb.importGraph;
+    if (ig && ig.stats.internalEdges > 0) {
+      const hubs = ig.stats.hubs.slice(0, 8);
+      lines.push(
+        `- import edges: ${ig.stats.internalEdges} internal · ${ig.stats.externalDeps} external deps`,
+      );
+      if (hubs.length > 0) {
+        lines.push("**Import hubs (fan-in)**", "");
+        for (const h of hubs) {
+          lines.push(`- ${h.path} ← ${h.fanIn}`);
+        }
+        lines.push("");
+      }
+    }
+
+    // Call-graph top callees — collapses (caller, callee) edges into "this
+    // function is called N times across the codebase".
+    const calls = cb.callEdges ?? [];
+    if (calls.length > 0) {
+      const counts: Record<string, number> = {};
+      for (const c of calls) counts[c.callee] = (counts[c.callee] ?? 0) + 1;
+      const top = Object.entries(counts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10);
+      lines.push("**Top callees**", "");
+      for (const [name, n] of top) {
+        lines.push(`- \`${name}\` — ${n}×`);
+      }
+      lines.push("");
+    }
+  }
+
+  return lines;
+}
+
 export function generateSkills(state: State, department?: Department): string {
   const units = activeUnits(state, department);
   if (units.length === 0) return "# Skill: Company Knowledge Memory\n\nNo knowledge ingested yet.\n";
@@ -479,6 +586,7 @@ export function generateSkills(state: State, department?: Department): string {
 
   lines.push(...renderAgentRules(units));
   lines.push(...renderRelationships(state, units));
+  lines.push(...renderCodeMap(state));
   lines.push(...renderSourceIndex(state, units));
   return lines.join("\n").trimEnd() + "\n";
 }

@@ -25,6 +25,7 @@ const NAV: { href: string; label: string; hint: string }[] = [
   { href: "/", label: "Brain", hint: "Overview" },
   { href: "/ingest", label: "Ingest", hint: "Capture knowledge" },
   { href: "/graph", label: "Map", hint: "Entities & links" },
+  { href: "/code", label: "Code", hint: "Codebase map · ownership · ADRs" },
   { href: "/ask", label: "Ask", hint: "Query the brain" },
   { href: "/skills", label: "Skills", hint: "Export for agents" },
   { href: "/slack", label: "Slack", hint: "MCP integration" },

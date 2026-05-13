@@ -27,11 +27,94 @@ export interface Unit {
   conflictsWith?: string[];
 }
 
+export interface FileSymbol {
+  name: string;
+  kind: string; // "class" | "function" | "method" | "type" | "interface" | "const" | "enum" | "struct" | "trait" | "impl"
+  line: number;
+  async?: boolean;
+  bases?: string[];
+  children?: FileSymbol[];
+}
+
+export interface FileOutline {
+  imports: string[];
+  exports: string[];
+  symbols: FileSymbol[];
+  _skipped?: string;
+  _error?: string;
+}
+
+export interface CodebaseFile {
+  path: string;
+  size: number;
+  category: string;
+  language: string;
+  outline?: FileOutline;
+}
+
+export interface SymbolOccurrence {
+  path: string;
+  kind: string;
+  line: number;
+  parent?: string;
+}
+
+export interface ImportEdge {
+  from: string;
+  to: string;
+  kind: string;
+}
+
+export interface ImportGraph {
+  edges: ImportEdge[];
+  external: Record<string, number>;
+  stats: {
+    internalEdges: number;
+    externalDeps: number;
+    hubs: { path: string; fanIn: number }[];
+  };
+}
+
+export interface CallEdge {
+  from: string;
+  fromFunc: string;
+  to: string;
+  callee: string;
+  line: number;
+  confidence: number;
+  ambiguous: boolean;
+}
+
+export interface ModuleSummary {
+  dir: string;
+  fileCount: number;
+  languages: Record<string, number>;
+  summary: string;
+}
+
+export interface CodebaseSummary {
+  totalFiles: number;
+  truncated?: boolean;
+  byLanguage: Record<string, number>;
+  byCategory: Record<string, number>;
+  topLevelDirs: Record<string, number>;
+  rationaleFilesExtracted?: number;
+  outlinesBuilt?: number;
+  files?: CodebaseFile[];
+  entityPaths?: Record<string, string[]>;
+  symbolIndex?: Record<string, SymbolOccurrence[]>;
+  importGraph?: ImportGraph;
+  callEdges?: CallEdge[];
+  moduleSummaries?: ModuleSummary[];
+}
+
 export interface Source {
   id: string;
   title: string;
   kind: string;
   capturedAt: string;
+  // Present when kind === "code" — the map produced by /api/ingest_code.
+  codebase?: CodebaseSummary;
 }
 
 export interface Entity {
