@@ -1,0 +1,333 @@
+================================================================================
+BRAINOS — LIVE PITCH SCRIPT
+A living operating system for company knowledge.
+Built on AMD MI300X. ~5 minutes. Demo-driven.
+================================================================================
+
+How to read this script
+-----------------------
+- Lines starting with [CLICK ...] or [SHOW ...] are presenter actions on the
+  live app — do them as you say the line before.
+- Lines starting with > are spoken, verbatim if you want, paraphrased if not.
+- Bracketed (~Xs) markers are time budgets. Total target: 5:00.
+- If you have only 3 minutes: skip sections 4 and 7. Land the demo and the ask.
+- If you have 7 minutes: expand section 7 (moat + GTM) and take questions live.
+
+
+--------------------------------------------------------------------------------
+0. SETUP BEFORE YOU START SPEAKING
+--------------------------------------------------------------------------------
+- Backend running on AMD MI300X via vLLM. /metrics tab open in a hidden window
+  in case someone asks "is this real?"
+- Browser on http://localhost:3000  — fresh brain, sources = 0, so the app
+  auto-redirects to /onboarding. That redirect is the demo opener.
+- Have a Slack workspace token configured (slack_config.json) so the channel
+  picker works on stage. If Slack is flaky, pivot to the "Paste anything" path
+  in step 4 — same pipeline, no network risk.
+- A SKILLS.md window pre-cued in a second tab, plus a Claude Code / Cursor
+  window ready to receive the file at the end.
+
+
+--------------------------------------------------------------------------------
+1. COLD OPEN — THE HOOK                                              (~20s)
+--------------------------------------------------------------------------------
+> Tom Blomfield at YC said the biggest blocker to AI inside companies is no
+> longer the model — it's the domain knowledge. Every company has critical
+> know-how scattered across Slack threads, runbooks, whiteboards, and three
+> engineers' heads. Agents like Claude Code and Cursor can write beautiful
+> code, but they don't know who owns the billing service, why you chose Stripe
+> over Adyen, or that your webhook handler silently drops on a missing
+> signature header.
+
+> The new bottleneck isn't writing code. It's giving the agent enough context
+> to write the right code.
+
+> We built BrainOS to be that context layer. Let me show you.
+
+
+--------------------------------------------------------------------------------
+2. THE PROBLEM, IN ONE SENTENCE                                      (~15s)
+--------------------------------------------------------------------------------
+> Roughly 60% of operational knowledge in any modern company lives in Slack.
+> 15% in Notion pages that go stale in months. The most valuable 5% lives
+> only in people's heads — and walks out the door when they leave.
+
+> Existing tools — Glean, Notion AI, vanilla RAG — return documents. Agents
+> don't need documents. They need a structured map of how the company
+> actually works.
+
+
+--------------------------------------------------------------------------------
+3. WHAT BRAINOS IS                                                   (~20s)
+--------------------------------------------------------------------------------
+> BrainOS ingests every form of company knowledge — Slack, docs, PDFs,
+> diagrams, whiteboard photos — and produces three things:
+>
+>   One. A directed knowledge graph. Real verbs: owns, manages, depends-on,
+>        replaces, reports-to. Not co-mention.
+>
+>   Two. Atomic, source-cited, time-aware facts. Every claim links back to
+>        the exact sentence it came from, with a confidence score.
+>
+>   Three. A SKILLS.md file that drops directly into Claude Code, Cursor, or
+>          a Custom GPT. The agent loads it before it acts.
+
+> Four specialized agents do the work — Ingestion, Structuring, Execution,
+> Feedback — and they all run concurrently on a single AMD MI300X.
+
+> Let me show you the whole thing in three minutes.
+
+
+--------------------------------------------------------------------------------
+4. THE DEMO — THE MEAT                                            (~2 min 30s)
+--------------------------------------------------------------------------------
+
+[OPEN http://localhost:3000]
+
+> Fresh brain. The app sees zero sources and redirects me into a four-step
+> onboarding wizard.
+
+
+-- Step 1: Pick a source --                                          (~15s)
+
+[SHOW the onboarding screen — three cards: Demo, Slack, Paste]
+
+> I can connect Slack, paste any text, or seed a demo company. I'll connect
+> Slack, because that's where 60% of real knowledge lives.
+
+[CLICK "Connect your Slack"]
+
+
+-- Step 2: Ingest from Slack --                                      (~45s)
+
+[SHOW the channel picker loading. Channels appear: #general, #engineering, #ops, ...]
+
+> The brain hits our Slack MCP integration, lists every channel the bot can
+> see, and lets me pick what to ingest.
+
+[CHECK 2-3 channels — pick #engineering and #ops]
+[CLICK "Pull from selected channels"]
+
+> Behind the scenes: for each channel, we pull the last fifty messages, run
+> them through the Ingestion agent on the MI300X, extract atomic units,
+> entities, and directed relationships, then hand off to the Structuring
+> agent which embeds them in a vector store and reconciles them against
+> what the brain already knows.
+
+[SHOW progress: sources tick up, units tick up, entities appear]
+
+> Notice the badges — fact, ownership, process, gotcha, decision. These are
+> kind-tagged. RAG doesn't do that.
+
+
+-- Show the graph --                                                 (~25s)
+
+[CLICK the Graph nav link in the sidebar]
+
+> This is the company, structurally. Every node is an entity — a person, a
+> team, a service, a customer. Every edge has a verb.
+
+[CLICK on an entity node, e.g. "Alice Chen"]
+
+> Click any node and I see exactly what they own, who they report to, what
+> systems they depend on. This is what an agent needs before it opens a PR.
+
+
+-- Ask a real question --                                            (~30s)
+
+[CLICK back to /onboarding step 3 — or jump to /ask]
+
+> Now let's ask it something only the company knows.
+
+[TYPE: "Who would I escalate to if our enterprise customer opens a P1?"]
+[CLICK Ask]
+
+> Sub-second on the MI300X. Notice three things:
+>
+>   One — the answer cites sources. F1, F3, R2. Hover and you see the exact
+>         sentence from Slack it came from.
+>
+>   Two — the green Grounded badge. That's a second-pass audit. A separate
+>         agent, the Feedback agent, re-reads the answer against the
+>         retrieved context and asks: is this actually supported? If the
+>         confidence drops below 0.72, the brain rewrites the answer with
+>         the unsupported claims removed and re-audits. That's a real
+>         hallucination guardrail, not a vibe check.
+>
+>   Three — confidence score, on the answer itself.
+
+
+-- Reconciliation: the moment that breaks RAG --                    (~25s)
+
+[OPEN /ingest, paste a contradicting Slack message:
+ "Bob and Nick took over billing-svc from Alice last week."]
+[CLICK Extract]
+
+[GO BACK to the graph]
+
+> Watch what just happened. The old ownership unit is now stale. Strikethrough.
+> The graph re-routed. The brain didn't keep both facts and hallucinate a
+> 50/50 answer like vanilla RAG would. It marked the old one historical and
+> the new one current. That's reconciliation, and it's the primitive that
+> makes BrainOS load-bearing instead of noisy.
+
+> If two sources conflict with no temporal cue, the brain keeps both and tags
+> them as Disputed — agents see the warning and refuse to act.
+
+
+-- Gap analysis: the brain knows what it doesn't know --             (~15s)
+
+[CLICK "Analyze knowledge gaps"]
+
+> Pure graph traversal, no LLM. The brain returns a punch list: services
+> with no documented owner, entities mentioned but never described, gotchas
+> with no sibling process, open disputes. RAG cannot do this.
+
+
+-- The payoff: SKILLS.md --                                          (~25s)
+
+[CLICK Skills tab → Download SKILLS.md]
+
+> And here's why this is infrastructure, not a chatbot. The brain compiles
+> itself into a SKILLS.md file. Per-department, confidence-filtered, with
+> a Scope block, an Agent Rules block, and the relationship graph as ASCII.
+
+[OPEN Claude Code in second tab, drop SKILLS.md into the project]
+[TYPE: "Open a PR to rotate the Stripe API key."]
+
+> Claude knows who to tag — Sam Torres. Knows the runbook — 1Password vault
+> Production-DB. Knows the gotcha — never restart prod DB without a second
+> engineer. Knows which clauses need legal review.
+
+> Five minutes ago, Claude knew nothing about this company. Now it does.
+
+
+--------------------------------------------------------------------------------
+5. WHY THIS ISN'T JUST RAG                                           (~30s)
+--------------------------------------------------------------------------------
+> Five things every production RAG system fails at, that BrainOS does today:
+>
+>   - A directed graph with real verbs, not co-mention.
+>   - Reconciliation as a primitive — supersession, conflict, dispute.
+>   - Multimodal extraction — diagrams and whiteboards become graph edges.
+>   - Verifier-triggered revision — the second-pass audit rewrites
+>     ungrounded answers and surfaces both versions.
+>   - Agent-shaped output — SKILLS.md is a stable target. Claude Skills,
+>     OpenAI GPTs, Cursor rules all consume the same format.
+
+> Every layer is open-source and self-hostable. No vendor lock-in is part
+> of the pitch.
+
+
+--------------------------------------------------------------------------------
+6. WHY AMD MI300X                                                    (~20s)
+--------------------------------------------------------------------------------
+> One hundred ninety-two gigabytes of HBM3 on a single card. We co-resident
+> a 70B text model, a 7B vision model, and a dedicated embedding model on
+> one GPU. Zero model-swap latency. On NVIDIA H100 — eighty gigs — this
+> needs three GPUs and an orchestration layer.
+
+> Two models. One GPU. One brain.
+
+[OPTIONAL: CLICK /metrics — show the live tok/s and KV-cache panel]
+
+> That's vLLM Prometheus, live. Tokens-per-second, queue depth, every LLM
+> call we made tonight, all visible. Real numbers, not slides.
+
+
+--------------------------------------------------------------------------------
+7. MOAT, GTM, AND THE ASK                                            (~30s)
+--------------------------------------------------------------------------------
+> Moat: workflow lock-in. Once the brain feeds an org's agents, replacing
+> it means re-extracting and re-validating thousands of facts. Every
+> correction makes the extraction better — for that customer, on their
+> idiosyncratic vocabulary.
+
+> Go-to-market: free open-source self-hosted version is what you saw
+> tonight. Paid hosted version with managed connectors — Slack, Notion,
+> GitHub, Linear, Salesforce — and a live MCP server so agents query the
+> brain in real time instead of loading a frozen file.
+
+> The plug exists. Anthropic Skills, Custom GPTs, Cursor rules — every
+> agent now consumes a context file. Nothing fills it for company-wide
+> knowledge.
+
+> We're looking for design partners and seed funding to ship the MCP
+> server, the live ingest streams, and the active-learning loop where the
+> brain pings the right person on Slack when it's not sure.
+
+
+--------------------------------------------------------------------------------
+8. CLOSE                                                             (~15s)
+--------------------------------------------------------------------------------
+> Every company in the world is going to need this layer. The agents are
+> here. The models are here. The GPU is here.
+
+> The brain wakes up every morning knowing more than it knew yesterday —
+> and tells you exactly what's now in dispute.
+
+> That's BrainOS. Happy to take questions.
+
+
+================================================================================
+APPENDIX A — ONE-LINE VERSION (cold-email / Twitter)
+================================================================================
+> BrainOS turns scattered company knowledge — Slack, docs, diagrams — into a
+> reconciled, source-cited graph that AI agents load before they act.
+> Built on AMD MI300X. Four specialized agents extract facts and directed
+> relationships, reconcile contradictions, surface conflicts, detect knowledge
+> gaps, and compile to a SKILLS.md any agent can load. Not search. The first
+> operating system for company knowledge in the agent era.
+
+
+================================================================================
+APPENDIX B — CONTINGENCY LINES
+================================================================================
+If Slack ingest fails on stage:
+> "Slack is flaky tonight — let me show the same pipeline through paste."
+[CLICK "Paste anything" path on /onboarding step 1, paste a Slack thread
+ verbatim, click Extract.] The pipeline is identical from there.
+
+If a question's answer comes back ungrounded (amber badge):
+> "And there's the verifier doing its job. The brain refused to make a claim
+>  it couldn't ground. RAG would have hallucinated. We surface the original
+>  draft if you want to see what was rejected."
+
+If asked "is this just GraphRAG?":
+> "GraphRAG builds a graph from co-mention. Ours has typed verbs, extracted
+>  by an LLM with a fixed vocabulary. GraphRAG doesn't reconcile. Doesn't
+>  detect disputes. Doesn't compile to a portable agent skills file. Same
+>  word, different primitive."
+
+If asked "why not just use a vector DB?":
+> "Vector DBs return passages. Our retrieval starts with extracted units as
+>  first-class citizens, falls back to raw chunks, and caps confidence at
+>  0.82 when it's relying on a chunk. The verifier knows which signal it
+>  used. RAG can't tell you that."
+
+If asked about cost / scaling:
+> "MI300X reuses function instances across requests via Fluid Compute on the
+>  serving side. Per-task model routing means heavy work goes to the 70B and
+>  cheap audit work goes to a 7B — both colocated on the same card. Latency
+>  is sub-second, GPU utilization is visible on /metrics."
+
+
+================================================================================
+APPENDIX C — TIMING SHEET
+================================================================================
+Section                                            Target   Cumulative
+1. Cold open                                        0:20      0:20
+2. Problem                                          0:15      0:35
+3. What BrainOS is                                  0:20      0:55
+4. Demo                                             2:30      3:25
+5. Why this isn't RAG                               0:30      3:55
+6. Why MI300X                                       0:20      4:15
+7. Moat / GTM / Ask                                 0:30      4:45
+8. Close                                            0:15      5:00
+                                                              -----
+                                                               5:00
+
+
+================================================================================
+END OF SCRIPT
+================================================================================

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { readState } from "@/lib/store";
 import { formatDate } from "@/lib/utils";
 import { SeedButton } from "@/components/seed-button";
@@ -30,6 +31,11 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const state = await readState();
+
+  if (state.sources.length === 0) {
+    redirect("/onboarding");
+  }
+
   const fresh = state.units.filter((u) => !u.stale && !u.supersededBy);
 
   const byKind = fresh.reduce<Record<string, number>>((acc, u) => {

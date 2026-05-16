@@ -148,6 +148,45 @@ def create_slack_router(
             payload["error"] = str(e)
         return payload
 
+    @router.get("/list_channels")
+    def list_channels(query: str = ""):
+        client = _client()
+        try:
+            payload = client.search_channels(query or " ")
+        except SlackMCPError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+
+        channels: list[dict[str, Any]] = []
+
+        def _walk(node: Any) -> None:
+            if isinstance(node, dict):
+                cid = node.get("id") or node.get("channel_id")
+                name = node.get("name") or node.get("channel_name")
+                if isinstance(cid, str) and cid.startswith("C") and isinstance(name, str):
+                    channels.append({
+                        "id": cid,
+                        "name": name,
+                        "is_member": bool(node.get("is_member", False)),
+                        "is_private": bool(node.get("is_private", False)),
+                        "num_members": node.get("num_members"),
+                    })
+                for value in node.values():
+                    _walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    _walk(item)
+
+        _walk(payload)
+
+        seen: dict[str, dict[str, Any]] = {}
+        for entry in channels:
+            seen.setdefault(entry["id"], entry)
+        configured = sorted(client.config.allowed_channels)
+        return {
+            "channels": sorted(seen.values(), key=lambda c: c["name"].lower()),
+            "configured_channel_ids": configured,
+        }
+
     @router.get("/channel_map")
     def channel_map():
         config = load_slack_config()
