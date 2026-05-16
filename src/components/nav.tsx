@@ -7,6 +7,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 
 const NAV: { href: string; label: string; hint: string }[] = [
   { href: "/", label: "Brain", hint: "Overview" },
+  { href: "/agent", label: "Agent", hint: "Autonomous AI · Gemma 4" },
   { href: "/ingest", label: "Ingest", hint: "Capture knowledge" },
   { href: "/failures", label: "Traps", hint: "Loop memory" },
   { href: "/graph", label: "Map", hint: "Entities & links" },

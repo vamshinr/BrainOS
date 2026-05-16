@@ -7,6 +7,19 @@ type GpuMetrics = {
   backend: string;
   model: string;
   vllm_endpoint: string;
+  vllm_metrics_url?: string;
+  serving_config?: {
+    model: string;
+    dtype: string;
+    max_model_len: number | null;
+    gpu_memory_utilization: number | null;
+    max_num_batched_tokens: number | null;
+    max_num_seqs: number | null;
+    chunked_prefill: boolean;
+    prefix_caching: boolean;
+    auto_tool_choice: boolean;
+    tool_call_parser: string;
+  };
   tokens_per_sec_generation: number | null;
   tokens_per_sec_prompt: number | null;
   requests_running: number;
@@ -157,6 +170,77 @@ function CacheBar({ label, pct }: { label: string; pct: number | null }) {
   );
 }
 
+function MetricPill({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border bg-[var(--muted)]/20 px-3 py-2">
+      <div className="text-[9px] uppercase tracking-widest text-[var(--muted-foreground)]">
+        {label}
+      </div>
+      <div className="mt-1 font-mono text-sm font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function KvCachePanel({ gpu }: { gpu: GpuMetrics }) {
+  const gpuPct = gpu.gpu_cache_usage_pct !== null ? gpu.gpu_cache_usage_pct * 100 : null;
+  const cpuPct = gpu.cpu_cache_usage_pct !== null ? gpu.cpu_cache_usage_pct * 100 : null;
+  const configuredGpu = gpu.serving_config?.gpu_memory_utilization;
+
+  return (
+    <div className="rounded-lg border bg-[var(--card)] px-4 py-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)]">
+            KV cache pressure
+          </div>
+          <div className="mt-1 text-sm text-[var(--muted-foreground)]">
+            vLLM cache occupancy from the Gemma serving process.
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="font-mono text-2xl font-semibold text-[var(--accent)]">
+            {gpuPct !== null ? `${gpuPct.toFixed(1)}%` : "—"}
+          </div>
+          <div className="text-[10px] text-[var(--muted-foreground)]">GPU KV</div>
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-4">
+        <CacheBar label="GPU KV-cache live usage" pct={gpuPct} />
+        <CacheBar label="CPU KV-cache spillover" pct={cpuPct} />
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <MetricPill
+          label="GPU mem target"
+          value={configuredGpu !== null && configuredGpu !== undefined ? `${(configuredGpu * 100).toFixed(0)}%` : "—"}
+        />
+        <MetricPill
+          label="Max sequences"
+          value={gpu.serving_config?.max_num_seqs ? String(gpu.serving_config.max_num_seqs) : "—"}
+        />
+        <MetricPill
+          label="Context"
+          value={gpu.serving_config?.max_model_len ? `${Math.round(gpu.serving_config.max_model_len / 1024)}K` : "—"}
+        />
+        <MetricPill
+          label="Batch tokens"
+          value={gpu.serving_config?.max_num_batched_tokens ? String(gpu.serving_config.max_num_batched_tokens) : "—"}
+        />
+      </div>
+
+      {!gpu.prometheus_reachable && (
+        <div className="mt-4 rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+          KV cache is unavailable because Prometheus metrics are not reachable.
+          Set <code className="font-mono">VLLM_METRICS_BASE</code> or{" "}
+          <code className="font-mono">AGENT_API_BASE</code> to the Gemma vLLM base URL, for example{" "}
+          <code className="font-mono">http://165.245.128.5:8001/v1</code>.
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Throughput sparkline (last N readings) ─────────────────────────────────────
 function Sparkline({ values, height = 40 }: { values: number[]; height?: number }) {
   if (values.length < 2) {
@@ -192,7 +276,7 @@ export default function MetricsPage() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<number | null>(null);
-  const [tick, setTick] = useState(0); // for relative-time re-render
+  const [, setTick] = useState(0); // for relative-time re-render
   // Rolling throughput history for sparkline (max 30 points)
   const [genHistory, setGenHistory] = useState<number[]>([]);
 
@@ -215,9 +299,12 @@ export default function MetricsPage() {
   }, []);
 
   useEffect(() => {
-    fetchMetrics();
+    const immediate = setTimeout(fetchMetrics, 0);
     const id = setInterval(fetchMetrics, REFRESH_MS);
-    return () => clearInterval(id);
+    return () => {
+      clearTimeout(immediate);
+      clearInterval(id);
+    };
   }, [fetchMetrics]);
 
   // Tick every second so relative time updates
@@ -301,45 +388,65 @@ export default function MetricsPage() {
               />
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-[1fr_220px] gap-4">
+            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-4">
               {/* Throughput sparkline */}
               <div className="rounded-lg border bg-[var(--card)] px-4 py-3">
                 <div className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] mb-3">
                   Generation throughput (tok/s) — last {genHistory.length} samples
                 </div>
                 <Sparkline values={genHistory} height={56} />
+
+                <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <MetricPill
+                    label="DType"
+                    value={snapshot.gpu.serving_config?.dtype ?? "—"}
+                  />
+                  <MetricPill
+                    label="Chunked prefill"
+                    value={snapshot.gpu.serving_config?.chunked_prefill ? "on" : "off"}
+                  />
+                  <MetricPill
+                    label="Prefix cache"
+                    value={snapshot.gpu.serving_config?.prefix_caching ? "on" : "off"}
+                  />
+                  <MetricPill
+                    label="Tool parser"
+                    value={snapshot.gpu.serving_config?.tool_call_parser ?? "—"}
+                  />
+                </div>
               </div>
 
               {/* Queue + cache */}
-              <div className="rounded-lg border bg-[var(--card)] px-4 py-3 space-y-4">
-                <div className="flex gap-4">
-                  <div>
-                    <div className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)]">Running</div>
-                    <div className="mt-1 text-xl font-semibold font-mono">
-                      {Math.round(snapshot.gpu.requests_running)}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)]">Waiting</div>
-                    <div
-                      className={`mt-1 text-xl font-semibold font-mono ${
-                        snapshot.gpu.requests_waiting > 0 ? "text-amber-500" : ""
-                      }`}
-                    >
-                      {Math.round(snapshot.gpu.requests_waiting)}
-                    </div>
-                  </div>
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <StatCard
+                    label="Running"
+                    value={String(Math.round(snapshot.gpu.requests_running))}
+                    sub="active requests"
+                    accent={snapshot.gpu.requests_running > 0}
+                  />
+                  <StatCard
+                    label="Waiting"
+                    value={String(Math.round(snapshot.gpu.requests_waiting))}
+                    sub="queued requests"
+                    warn={snapshot.gpu.requests_waiting > 0}
+                  />
                 </div>
-                <CacheBar label="GPU KV-cache" pct={snapshot.gpu.gpu_cache_usage_pct !== null ? snapshot.gpu.gpu_cache_usage_pct * 100 : null} />
-                <CacheBar label="CPU KV-cache" pct={snapshot.gpu.cpu_cache_usage_pct !== null ? snapshot.gpu.cpu_cache_usage_pct * 100 : null} />
+                <KvCachePanel gpu={snapshot.gpu} />
               </div>
             </div>
 
             {/* Model info strip */}
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[var(--muted-foreground)]">
-              <span>Model: <span className="font-mono text-[var(--foreground)]">{snapshot.gpu.model}</span></span>
+              <span>Serving: <span className="font-mono text-[var(--foreground)]">{snapshot.gpu.serving_config?.model ?? snapshot.gpu.model}</span></span>
               <span>·</span>
               <span>Endpoint: <span className="font-mono">{snapshot.gpu.vllm_endpoint}</span></span>
+              {snapshot.gpu.vllm_metrics_url && (
+                <>
+                  <span>·</span>
+                  <span>Metrics: <span className="font-mono">{snapshot.gpu.vllm_metrics_url}</span></span>
+                </>
+              )}
               {!snapshot.gpu.prometheus_reachable && (
                 <>
                   <span>·</span>
@@ -533,7 +640,7 @@ export default function MetricsPage() {
                 192 GB of unified HBM3 memory lets BrainOS run a 70B text model{" "}
                 <em>and</em> a vision model simultaneously on a single GPU — no multi-node
                 orchestration, no model-splitting overhead. On an NVIDIA H100 (80 GB)
-                this requires 3+ GPUs. Here it's one card.
+                this requires 3+ GPUs. Here it is one card.
               </p>
             </div>
           </section>

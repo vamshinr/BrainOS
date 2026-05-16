@@ -4650,6 +4650,56 @@ def ask_brainos(req: QueryRequest):
     }
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on", "enabled"}
+
+
+def _env_float(name: str, default: float | None = None) -> float | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int | None = None) -> int | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _vllm_metrics_base() -> str:
+    """
+    Endpoint used for vLLM Prometheus stats. The agent demo often runs on a
+    dedicated Gemma vLLM server, so let metrics follow that server even when the
+    ingestion LLM endpoint is configured separately.
+    """
+    base = (
+        os.getenv("VLLM_METRICS_BASE")
+        or os.getenv("AGENT_API_BASE")
+        or os.getenv("LLM_API_BASE")
+        or os.getenv("VLLM_API_BASE")
+        or vllm_url
+    ).strip()
+    base = base.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    return base
+
+
+def _vllm_metrics_url() -> str:
+    return f"{_vllm_metrics_base()}/metrics"
+
+
 def _fetch_vllm_prometheus() -> dict:
     """
     Fetch raw Prometheus metrics from vLLM and parse the key gauges/counters.
@@ -4659,10 +4709,7 @@ def _fetch_vllm_prometheus() -> dict:
     import urllib.request
     import re
 
-    base = vllm_url.rstrip("/")
-    if base.endswith("/v1"):
-        base = base[:-3]
-    metrics_url = f"{base}/metrics"
+    metrics_url = _vllm_metrics_url()
 
     try:
         with urllib.request.urlopen(metrics_url, timeout=3) as resp:
@@ -4710,6 +4757,19 @@ def get_metrics():
             "backend": "AMD MI300X",
             "model": MODEL_NAME,
             "vllm_endpoint": vllm_url,
+            "vllm_metrics_url": _vllm_metrics_url(),
+            "serving_config": {
+                "model": os.getenv("AGENT_MODEL_NAME", MODEL_NAME),
+                "dtype": os.getenv("VLLM_DTYPE", "bfloat16"),
+                "max_model_len": _env_int("VLLM_MAX_MODEL_LEN", 32768),
+                "gpu_memory_utilization": _env_float("VLLM_GPU_MEMORY_UTILIZATION", 0.95),
+                "max_num_batched_tokens": _env_int("VLLM_MAX_NUM_BATCHED_TOKENS", 8192),
+                "max_num_seqs": _env_int("VLLM_MAX_NUM_SEQS", 32),
+                "chunked_prefill": _env_bool("VLLM_ENABLE_CHUNKED_PREFILL", True),
+                "prefix_caching": _env_bool("VLLM_ENABLE_PREFIX_CACHING", True),
+                "auto_tool_choice": _env_bool("VLLM_ENABLE_AUTO_TOOL_CHOICE", True),
+                "tool_call_parser": os.getenv("VLLM_TOOL_CALL_PARSER", "hermes"),
+            },
             # Throughput
             "tokens_per_sec_generation": _g(
                 "vllm:avg_generation_throughput_toks_per_s",
@@ -4723,8 +4783,17 @@ def get_metrics():
             "requests_running": _g("vllm:num_requests_running", default=0),
             "requests_waiting": _g("vllm:num_requests_waiting", default=0),
             # GPU KV-cache
-            "gpu_cache_usage_pct": _g("vllm:gpu_cache_usage_perc"),
-            "cpu_cache_usage_pct": _g("vllm:cpu_cache_usage_perc"),
+            "gpu_cache_usage_pct": _g(
+                "vllm:gpu_cache_usage_perc",
+                "vllm:gpu_cache_usage_percentage",
+                "vllm:gpu_cache_usage",
+                "vllm:kv_cache_usage_perc",
+            ),
+            "cpu_cache_usage_pct": _g(
+                "vllm:cpu_cache_usage_perc",
+                "vllm:cpu_cache_usage_percentage",
+                "vllm:cpu_cache_usage",
+            ),
             # Latency
             "avg_e2e_latency_s": avg_latency_s,
             "total_requests_finished": _g(
@@ -5223,6 +5292,263 @@ def cancel_job(job_id: str):
     if not ok:
         raise HTTPException(status_code=400, detail="job not cancelable (finished or unknown)")
     return {"ok": True, "canceled": job_id}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BrainOS Autonomous Agent — Gemma 4 on vLLM
+# ══════════════════════════════════════════════════════════════════════════════
+
+from brainos_agent import get_agent, init_agent
+
+
+def _agent_ask_brain(question: str) -> dict:
+    query = (question or "").strip()
+    if not query:
+        raise ValueError("No question was provided to ask_brain.")
+
+    result = exec_agent.execute(query)
+    return {
+        "answer": result.get("answer", ""),
+        "retrieved_ids": result.get("retrieved_ids", []),
+        "retrieved_docs": result.get("retrieved_docs", [])[:3],
+        "latency_ms": result.get("latency_ms"),
+        "retrieval_mode": result.get("retrieval_mode"),
+    }
+
+
+def _agent_ingest_text(text: str, title: str = "Agent Ingestion") -> dict:
+    content = (text or "").strip()
+    if not content:
+        raise ValueError("No text was provided to ingest.")
+
+    source_title = (title or "").strip() or content.splitlines()[0][:80] or "Agent Ingestion"
+    job = job_queue.submit(
+        kind="ingest_text",
+        title=source_title,
+        handler=_handler_ingest_text,
+        payload={
+            "kind": "agent",
+            "title": source_title,
+            "content": content,
+            "url": None,
+            "model": None,
+        },
+    )
+    return {
+        "queued": True,
+        "job_id": job.id,
+        "status": job.status,
+        "queue_position": job_queue.queue_position(job.id),
+        "title": source_title,
+        "message": "Ingestion job queued. The BrainOS job dock will show extraction and reconciliation progress.",
+    }
+
+
+def _agent_analyze_gaps() -> dict:
+    brain = _read_brain()
+    units = [u for u in brain.get("units", []) if not u.get("stale") and not u.get("supersededBy")]
+    entities = brain.get("entities", [])
+    rels = brain.get("relationships", [])
+    gaps = []
+    OWNER_VERBS = {"owns", "manages", "governs"}
+    owned_targets = {r["to"].lower() for r in rels if r.get("relation", "").lower() in OWNER_VERBS}
+    for e in entities:
+        if e["kind"] in ("system", "product", "team") and e["name"].lower() not in owned_targets:
+            gaps.append({"severity": "high", "kind": "missing_owner", "entity": e["name"],
+                         "message": f"No documented owner for {e['kind']} '{e['name']}'."})
+    subjects = {u["subject"].lower() for u in units if u.get("subject")}
+    mentioned = {n.lower() for u in units for n in u.get("entities", [])}
+    for name in mentioned - subjects:
+        if name and name not in owned_targets and len(name) > 2:
+            ent = next((e for e in entities if e["name"].lower() == name), None)
+            if ent:
+                gaps.append({"severity": "medium", "kind": "undescribed_entity", "entity": ent["name"],
+                             "message": f"'{ent['name']}' is mentioned but never described directly."})
+    for u in units:
+        if u.get("disputed"):
+            gaps.append({"severity": "high", "kind": "open_dispute", "entity": u.get("subject", ""),
+                         "message": f"Disputed claim: {u.get('statement', '')}"})
+    sev_order = {"high": 0, "medium": 1, "low": 2}
+    gaps.sort(key=lambda g: sev_order.get(g["severity"], 3))
+    return {"gaps": gaps[:20], "total": len(gaps),
+            "counts": {"high": sum(1 for g in gaps if g["severity"] == "high"),
+                       "medium": sum(1 for g in gaps if g["severity"] == "medium"),
+                       "low": sum(1 for g in gaps if g["severity"] == "low")}}
+
+
+def _agent_get_graph_summary(entity_filter: str = "") -> dict:
+    brain = _read_brain()
+    entities = brain.get("entities", [])
+    rels = brain.get("relationships", [])
+    units = [u for u in brain.get("units", []) if not u.get("stale")]
+    if entity_filter:
+        ef = entity_filter.lower()
+        entities = [e for e in entities if ef in e["name"].lower()]
+        rels = [r for r in rels if ef in r.get("from", "").lower() or ef in r.get("to", "").lower()]
+    by_kind: dict = {}
+    for e in entities:
+        by_kind.setdefault(e["kind"], []).append(e["name"])
+    sample_rels = [f"{r['from']} --{r.get('relation', r.get('verb', '?'))}--> {r['to']}" for r in rels[:15]]
+    return {
+        "entity_count": len(entities),
+        "relationship_count": len(rels),
+        "unit_count": len(units),
+        "entities_by_kind": {k: v[:10] for k, v in by_kind.items()},
+        "sample_relationships": sample_rels,
+    }
+
+
+def _agent_export_skills(department: str = "") -> dict:
+    """
+    Calls the real /api/skills Next.js endpoint which runs generateSkills() —
+    the full 650-line TypeScript implementation with agent rules, ownership routing,
+    gotchas, temporal notes, knowledge graph relationships, source index, confidence
+    filtering, and code map. Falls back to a minimal Python version if frontend is unreachable.
+    """
+    FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+    url = f"{FRONTEND_URL}/api/skills"
+    if department:
+        valid_depts = {"engineering","product","legal","finance","hr","sales","marketing","operations","security","general"}
+        dept_clean = department.strip().lower()
+        if dept_clean in valid_depts:
+            url += f"?department={dept_clean}"
+
+    try:
+        resp = httpx.get(url, timeout=15.0)
+        resp.raise_for_status()
+        skills_md = resp.text
+        # Count units from brain as metadata
+        brain = _read_brain()
+        active_units = [u for u in brain.get("units", []) if not u.get("stale") and not u.get("supersededBy")]
+        if department:
+            dept_clean = department.strip().lower()
+            dept_units = [u for u in active_units if u.get("department", "").lower() == dept_clean]
+            unit_count = len(dept_units)
+        else:
+            unit_count = len(active_units)
+        return {
+            "department": department or "all",
+            "unit_count": unit_count,
+            "skills_md": skills_md,
+            "source": "generateSkills (full)",
+            "download_url": url,
+        }
+    except Exception as e:
+        # Fallback: minimal Python version when frontend is unreachable
+        brain = _read_brain()
+        units = [u for u in brain.get("units", []) if not u.get("stale") and not u.get("supersededBy")]
+        if department:
+            dept_clean = department.strip().lower()
+            units = [u for u in units if u.get("department", "").lower() == dept_clean]
+
+        KIND_ORDER = ["ownership", "policy", "process", "gotcha", "decision", "definition", "fact"]
+        by_kind: dict = {}
+        for u in units:
+            by_kind.setdefault(u.get("kind", "fact"), []).append(u)
+
+        lines = [
+            f"# Skill: {(department or 'Company').title()} Knowledge Memory",
+            "",
+            f"Department: {department or 'all'}  |  Units: {len(units)}",
+            "",
+            "## Agent Rules",
+            "",
+            "- Use this skill as company-specific operational memory, not general advice.",
+            "- Prefer current facts over historical or expired ones.",
+            "- Do not invent owners, approvals, dates, or prices not listed here.",
+            "",
+        ]
+        for kind in KIND_ORDER:
+            kind_units = by_kind.get(kind, [])
+            if not kind_units:
+                continue
+            lines.append(f"## {kind.title()}s")
+            lines.append("")
+            for u in kind_units[:20]:
+                subj = u.get("subject", "")
+                stmt = u.get("statement", "")
+                conf = u.get("confidence", 0)
+                lines.append(f"- {subj}: {stmt}  (confidence: {conf:.2f})")
+            lines.append("")
+
+        rels = brain.get("relationships", [])
+        if rels:
+            lines.append("## Knowledge Graph Relationships")
+            lines.append("")
+            for r in rels[:30]:
+                lines.append(f"- {r.get('from','')} --{r.get('relation', r.get('verb','?'))}--> {r.get('to','')}")
+            lines.append("")
+
+        return {
+            "department": department or "all",
+            "unit_count": len(units),
+            "skills_md": "\n".join(lines),
+            "source": "fallback (frontend unreachable)",
+            "error": str(e),
+        }
+
+
+def _agent_detect_failures() -> dict:
+    brain = _read_brain()
+    units = [u for u in brain.get("units", []) if not u.get("stale")]
+    failures = [u for u in units if u.get("kind") == "gotcha" or u.get("disputed")]
+    return {
+        "failure_count": len(failures),
+        "failures": [{"subject": u.get("subject"), "statement": u.get("statement"), "kind": u.get("kind")}
+                     for u in failures[:10]],
+    }
+
+
+def _agent_get_metrics() -> dict:
+    prom = _fetch_vllm_prometheus()
+    brain = _read_brain()
+
+    def _g(*keys, default=None):
+        for k in keys:
+            if k in prom:
+                return prom[k]
+        return default
+
+    return {
+        "tokens_per_second": _g("vllm:avg_generation_throughput_toks_per_s", default=0),
+        "gpu_cache_usage": _g("vllm:gpu_cache_usage_perc", default=0),
+        "pending_requests": _g("vllm:num_requests_waiting", default=0),
+        "running_requests": _g("vllm:num_requests_running", default=0),
+        "unit_count": len(brain.get("units", [])),
+        "entity_count": len(brain.get("entities", [])),
+    }
+
+
+_brainos_agent = init_agent({
+    "ask_brain": _agent_ask_brain,
+    "ingest_text": _agent_ingest_text,
+    "analyze_gaps": _agent_analyze_gaps,
+    "get_graph_summary": _agent_get_graph_summary,
+    "export_skills": _agent_export_skills,
+    "detect_failures": _agent_detect_failures,
+    "get_metrics": _agent_get_metrics,
+})
+
+
+class AgentRequest(BaseModel):
+    session_id: Optional[str] = None
+    message: str
+
+
+@app.post("/api/agent")
+def agent_chat(req: AgentRequest):
+    session_id = req.session_id or str(uuid.uuid4())
+    try:
+        response = _brainos_agent.run(session_id=session_id, user_message=req.message)
+        return response.to_dict()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Agent error: {e}")
+
+
+@app.delete("/api/agent/session/{session_id}")
+def clear_agent_session(session_id: str):
+    _brainos_agent.clear_session(session_id)
+    return {"ok": True, "cleared": session_id}
 
 
 if __name__ == "__main__":
