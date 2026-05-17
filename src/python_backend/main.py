@@ -1,3 +1,4 @@
+from __future__ import annotations
 import json
 import os
 os.environ.setdefault("TQDM_DISABLE", "1")  # suppress sentence-transformers progress bar
@@ -511,6 +512,7 @@ _project_root = os.path.abspath(
 DATA_DIR = os.environ.get("BRAIN_DATA_DIR") or os.path.join(_project_root, "data")
 CHROMA_PATH = os.path.join(DATA_DIR, "chroma_db")
 BRAIN_JSON = os.path.join(DATA_DIR, "brain.json")
+DECISION_ALERTS_JSON = os.path.join(DATA_DIR, "decision_alerts.json")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # ── Embedding backend selection ────────────────────────────────────────────────
@@ -587,6 +589,141 @@ def _write_brain(state: dict):
     with _json_lock:
         with open(BRAIN_JSON, "w") as f:
             json.dump(state, f, indent=2)
+
+
+# ── CEO decision alerts ───────────────────────────────────────────────────────
+# Realtime Slack ingestion writes normal BrainOS units first. This lightweight
+# store keeps the separate "executive alert" surface durable without adding a DB.
+def _decision_alert_min_confidence() -> float:
+    raw = os.getenv("CEO_DECISION_ALERT_MIN_CONFIDENCE", "0.78")
+    try:
+        return max(0.0, min(1.0, float(raw)))
+    except ValueError:
+        return 0.78
+
+
+class DecisionAlertStore:
+    def __init__(self, path: str):
+        self.path = path
+        self._lock = threading.Lock()
+        self._listeners: list[_stdlib_queue.Queue] = []
+
+    def _read_unlocked(self) -> list[dict]:
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        return []
+
+    def _write_unlocked(self, alerts: list[dict]):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(alerts, f, indent=2)
+
+    def list(self, *, include_closed: bool = False) -> list[dict]:
+        with self._lock:
+            alerts = self._read_unlocked()
+        if include_closed:
+            return alerts
+        return [a for a in alerts if a.get("status") == "open"]
+
+    def create_for_source(self, *, source: dict, units: list[dict]) -> list[dict]:
+        min_conf = _decision_alert_min_confidence()
+        now = _utc_now_iso()
+        created: list[dict] = []
+        with self._lock:
+            alerts = self._read_unlocked()
+            existing_unit_ids = {a.get("unitId") for a in alerts}
+            for unit in units:
+                if unit.get("id") in existing_unit_ids:
+                    continue
+                if unit.get("kind") != "decision":
+                    continue
+                if unit.get("stale") or unit.get("supersededBy"):
+                    continue
+                try:
+                    confidence = float(unit.get("confidence", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    confidence = 0.0
+                if confidence < min_conf:
+                    continue
+
+                evidence = next(
+                    (ev for ev in unit.get("evidence", []) if isinstance(ev, dict)),
+                    {},
+                )
+                alert = {
+                    "id": str(uuid.uuid4())[:10],
+                    "unitId": unit.get("id"),
+                    "statement": unit.get("statement", ""),
+                    "subject": unit.get("subject", ""),
+                    "confidence": confidence,
+                    "sourceId": source.get("id") or evidence.get("sourceId"),
+                    "sourceTitle": source.get("title", ""),
+                    "channelId": source.get("channelId"),
+                    "channelName": source.get("channelName"),
+                    "threadTs": source.get("threadTs"),
+                    "evidenceQuote": evidence.get("quote", ""),
+                    "createdAt": now,
+                    "status": "open",
+                }
+                alerts.insert(0, alert)
+                created.append(alert)
+            if created:
+                self._write_unlocked(alerts)
+
+        for alert in created:
+            self._notify("decision_alert.created", alert)
+        return created
+
+    def update_status(self, alert_id: str, status: str) -> dict | None:
+        now = _utc_now_iso()
+        updated = None
+        with self._lock:
+            alerts = self._read_unlocked()
+            for alert in alerts:
+                if alert.get("id") == alert_id:
+                    alert["status"] = status
+                    if status == "acknowledged":
+                        alert["acknowledgedAt"] = now
+                    elif status == "dismissed":
+                        alert["dismissedAt"] = now
+                    updated = alert
+                    break
+            if updated:
+                self._write_unlocked(alerts)
+        if updated:
+            self._notify(f"decision_alert.{status}", updated)
+        return updated
+
+    def listen(self) -> _stdlib_queue.Queue:
+        q: _stdlib_queue.Queue = _stdlib_queue.Queue(maxsize=256)
+        with self._lock:
+            self._listeners.append(q)
+        return q
+
+    def unlisten(self, q):
+        with self._lock:
+            if q in self._listeners:
+                self._listeners.remove(q)
+
+    def _notify(self, event: str, alert: dict):
+        payload = {"event": event, "alert": alert}
+        with self._lock:
+            dead = []
+            for q in self._listeners:
+                try:
+                    q.put_nowait(payload)
+                except _stdlib_queue.Full:
+                    dead.append(q)
+            for q in dead:
+                self._listeners.remove(q)
+
+
+decision_alerts = DecisionAlertStore(DECISION_ALERTS_JSON)
 
 # ── In-memory BM25 + entity indexes ───────────────────────────────────────────
 _bm25_index: object = None           # BM25Okapi instance (None until first ingest)
@@ -2737,6 +2874,72 @@ def _handler_ingest_text(job: Job, q: JobQueue) -> dict:
     }
 
 
+def _handler_ingest_slack_realtime(job: Job, q: JobQueue) -> dict:
+    from slack_mcp.ingest import ingest_slack_document
+    from slack_mcp.schemas import SlackSourceDocument
+
+    p = job.payload
+    doc = SlackSourceDocument(**p["doc"])
+    q.update_progress(job.id, step="extracting Slack decision context", progress=0.15)
+    result = ingest_slack_document(
+        doc,
+        ingest_agent=ingest_agent,
+        struct_agent=struct_agent,
+        chunk_text=_chunk_text,
+        max_extraction_chars=_MAX_EXTRACTION_CHARS,
+        utc_now_iso=_utc_now_iso,
+        debug_event=_debug_event,
+        model=p.get("model"),
+    )
+
+    alerts_created: list[dict] = []
+    if p.get("ceo_alerts"):
+        q.update_progress(job.id, step="routing CEO decision alerts", progress=0.9)
+        source_id = result.get("source_id")
+        brain = _read_brain()
+        source = next(
+            (s for s in brain.get("sources", []) if s.get("id") == source_id),
+            {"id": source_id, "title": doc.title, "channelId": doc.channel_id, "channelName": doc.channel_name, "threadTs": doc.thread_ts},
+        )
+        units = [
+            u for u in brain.get("units", [])
+            if any(ev.get("sourceId") == source_id for ev in (u.get("evidence") or []) if isinstance(ev, dict))
+        ]
+        alerts_created = decision_alerts.create_for_source(source=source, units=units)
+        _debug_event(
+            "decision_alerts.created",
+            "Created CEO decision alerts from realtime Slack ingest",
+            source_id=source_id,
+            alerts=len(alerts_created),
+        )
+
+    return {
+        **result,
+        "alerts_created": len(alerts_created),
+        "alert_ids": [a["id"] for a in alerts_created],
+    }
+
+
+def _enqueue_slack_realtime_ingest(doc, ceo_alerts: bool) -> dict:
+    job = job_queue.submit(
+        kind="slack_realtime",
+        title=doc.title,
+        handler=_handler_ingest_slack_realtime,
+        payload={
+            "doc": doc.model_dump() if hasattr(doc, "model_dump") else doc.dict(),
+            "ceo_alerts": ceo_alerts,
+            "model": None,
+        },
+    )
+    return {
+        "queued": True,
+        "job_id": job.id,
+        "status": job.status,
+        "queue_position": job_queue.queue_position(job.id),
+        "title": job.title,
+    }
+
+
 def _handler_ingest_file(job: Job, q: JobQueue) -> dict:
     p = job.payload
     filename = p["filename"]
@@ -4877,6 +5080,7 @@ app.include_router(create_slack_router(
     utc_now_iso=_utc_now_iso,
     debug_event=_debug_event,
     is_sensitive=_is_sensitive,
+    enqueue_realtime_ingest=_enqueue_slack_realtime_ingest,
 ))
 
 
@@ -5130,6 +5334,61 @@ def delete_unit(unit_id: str):
     return {"ok": True, "deleted": unit_id}
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# CEO decision alert endpoints
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/decision-alerts")
+def list_decision_alerts(include_closed: bool = False):
+    return {
+        "alerts": decision_alerts.list(include_closed=include_closed),
+        "min_confidence": _decision_alert_min_confidence(),
+    }
+
+
+@app.get("/api/decision-alerts/stream")
+def stream_decision_alerts():
+    listener = decision_alerts.listen()
+
+    def gen():
+        try:
+            yield f"data: {json.dumps({'event': 'snapshot', 'alerts': decision_alerts.list()})}\n\n"
+            while True:
+                try:
+                    msg = listener.get(timeout=15)
+                    yield f"data: {json.dumps(msg)}\n\n"
+                except _stdlib_queue.Empty:
+                    yield ": keepalive\n\n"
+        finally:
+            decision_alerts.unlisten(listener)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@app.post("/api/decision-alerts/{alert_id}/ack")
+def acknowledge_decision_alert(alert_id: str):
+    alert = decision_alerts.update_status(alert_id, "acknowledged")
+    if not alert:
+        raise HTTPException(status_code=404, detail="decision alert not found")
+    return {"ok": True, "alert": alert}
+
+
+@app.post("/api/decision-alerts/{alert_id}/dismiss")
+def dismiss_decision_alert(alert_id: str):
+    alert = decision_alerts.update_status(alert_id, "dismissed")
+    if not alert:
+        raise HTTPException(status_code=404, detail="decision alert not found")
+    return {"ok": True, "alert": alert}
+
+
 @app.delete("/api/clear")
 def clear_all():
     """Hard reset of the entire RAG pipeline:
@@ -5205,13 +5464,19 @@ def clear_all():
             except Exception as e:
                 print(f"[BrainOS] WARNING: could not remove orphan {full}: {e}")
 
-    # 5. brain.json
+    # 5. brain.json + decision alerts
     if os.path.exists(BRAIN_JSON):
         try:
             os.remove(BRAIN_JSON)
             removed.append(BRAIN_JSON)
         except Exception as e:
             print(f"[BrainOS] WARNING: could not remove {BRAIN_JSON}: {e}")
+    if os.path.exists(DECISION_ALERTS_JSON):
+        try:
+            os.remove(DECISION_ALERTS_JSON)
+            removed.append(DECISION_ALERTS_JSON)
+        except Exception as e:
+            print(f"[BrainOS] WARNING: could not remove {DECISION_ALERTS_JSON}: {e}")
 
     # 6. uploads / ingested / snapshots — ingest artifacts
     for sub in ("uploads", "ingested", "snapshots"):

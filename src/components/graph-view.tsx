@@ -422,19 +422,22 @@ export function GraphView({
 
       {/* ── Controls (top-right) ── */}
       <div className="absolute top-3 right-3 z-10 flex flex-col gap-1">
-        {(
-          [
-            ["+", "Zoom in", () => setTf(t => ({ ...t, s: Math.min(7, t.s * 1.3) }))],
-            ["−", "Zoom out", () => setTf(t => ({ ...t, s: Math.max(0.12, t.s / 1.3) }))],
-            ["⊡", "Fit to screen", fitScreen],
-            [isFull ? "⊠" : "⤢", isFull ? "Exit fullscreen" : "Fullscreen", toggleFull],
-          ] as [string, string, () => void][]
-        ).map(([label, title, fn]) => (
-          <button key={title} title={title} onClick={fn}
-            className="size-8 rounded border border-[var(--border)] bg-[var(--background)]/90 backdrop-blur-sm text-sm font-mono hover:bg-[var(--muted)] transition-colors flex items-center justify-center shadow-sm">
-            {label}
-          </button>
-        ))}
+        <button title="Zoom in" onClick={() => setTf(t => ({ ...t, s: Math.min(7, t.s * 1.3) }))}
+          className="size-8 rounded border border-[var(--border)] bg-[var(--background)]/90 backdrop-blur-sm text-sm font-mono hover:bg-[var(--muted)] transition-colors flex items-center justify-center shadow-sm">
+          +
+        </button>
+        <button title="Zoom out" onClick={() => setTf(t => ({ ...t, s: Math.max(0.12, t.s / 1.3) }))}
+          className="size-8 rounded border border-[var(--border)] bg-[var(--background)]/90 backdrop-blur-sm text-sm font-mono hover:bg-[var(--muted)] transition-colors flex items-center justify-center shadow-sm">
+          −
+        </button>
+        <button title="Fit to screen" onClick={fitScreen}
+          className="size-8 rounded border border-[var(--border)] bg-[var(--background)]/90 backdrop-blur-sm text-sm font-mono hover:bg-[var(--muted)] transition-colors flex items-center justify-center shadow-sm">
+          ⊡
+        </button>
+        <button title={isFull ? "Exit fullscreen" : "Fullscreen"} onClick={toggleFull}
+          className="size-8 rounded border border-[var(--border)] bg-[var(--background)]/90 backdrop-blur-sm text-sm font-mono hover:bg-[var(--muted)] transition-colors flex items-center justify-center shadow-sm">
+          {isFull ? "⊠" : "⤢"}
+        </button>
       </div>
 
       {/* ── Legend (top-left) ── */}

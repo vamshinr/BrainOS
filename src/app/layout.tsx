@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Nav } from "@/components/nav";
 import { QueueDock } from "@/components/queue-dock";
+import { DecisionAlertPopover } from "@/components/decision-alert-popover";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -56,6 +57,7 @@ export default function RootLayout({
           <Nav />
           <main className="min-w-0 pb-24">{children}</main>
         </div>
+        <DecisionAlertPopover />
         <QueueDock />
       </body>
     </html>

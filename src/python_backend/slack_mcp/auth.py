@@ -21,6 +21,8 @@ class SlackMCPConfig:
     bot_user_id: str | None
     allowed_channels: set[str]
     auto_answer_channels: set[str]
+    realtime_ingest_channels: set[str]
+    ceo_decision_alert_channels: set[str]
     auto_answer_prefixes: tuple[str, ...]
     default_department: str
     channel_map: dict[str, str]
@@ -67,6 +69,16 @@ def load_slack_config() -> SlackMCPConfig:
         for item in os.getenv("SLACK_AUTO_ANSWER_CHANNELS", "").split(",")
         if item.strip()
     }
+    realtime_ingest_channels = {
+        item.strip()
+        for item in os.getenv("SLACK_REALTIME_INGEST_CHANNELS", "").split(",")
+        if item.strip()
+    }
+    ceo_decision_alert_channels = {
+        item.strip()
+        for item in os.getenv("SLACK_CEO_DECISION_ALERT_CHANNELS", "").split(",")
+        if item.strip()
+    }
     auto_answer_prefixes = tuple(
         item.strip().lower()
         for item in os.getenv("SLACK_AUTO_ANSWER_PREFIXES", "brainos:,brainos,?").split(",")
@@ -79,6 +91,8 @@ def load_slack_config() -> SlackMCPConfig:
         bot_user_id=os.getenv("SLACK_BOT_USER_ID") or token_data.get("bot_user_id"),
         allowed_channels=allowed,
         auto_answer_channels=auto_answer_channels,
+        realtime_ingest_channels=realtime_ingest_channels,
+        ceo_decision_alert_channels=ceo_decision_alert_channels,
         auto_answer_prefixes=auto_answer_prefixes,
         default_department=os.getenv("SLACK_DEFAULT_DEPARTMENT", "general").strip() or "general",
         channel_map={str(k): str(v) for k, v in channel_map.items()},

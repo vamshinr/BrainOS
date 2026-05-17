@@ -24,7 +24,18 @@ export default function SlackPage() {
   }
 
   useEffect(() => {
-    loadHealth().catch((e) => setHealth({ error: String(e) }));
+    let cancelled = false;
+    fetch("/api/slack/health", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!cancelled) setHealth(data);
+      })
+      .catch((e) => {
+        if (!cancelled) setHealth({ error: String(e) });
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function postJson(path: string, body: Record<string, unknown>) {
@@ -151,6 +162,8 @@ export default function SlackPage() {
         </pre>
       </section>
 
+      <RealtimeDecisionAlerts health={health} />
+
       <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <ControlCard title="Shared Slack Context">
           <LabeledInput label="Channel ID" value={channelId} onChange={setChannelId} placeholder="C1234567890" />
@@ -247,6 +260,97 @@ export default function SlackPage() {
       </section>
     </div>
   );
+}
+
+function RealtimeDecisionAlerts({ health }: { health: Result }) {
+  const realtime = stringList(health?.realtime_ingest_channels);
+  const alertChannels = stringList(health?.ceo_decision_alert_channels);
+  const channelMap = recordOfStrings(health?.channel_map);
+  const mapped = Object.entries(channelMap);
+
+  return (
+    <section className="mt-6 rounded-lg border bg-[var(--card)] p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="font-semibold">Realtime Decision Alerts</h2>
+          <p className="mt-1 max-w-2xl text-sm text-[var(--muted-foreground)]">
+            Slack message events in realtime ingest channels are queued into BrainOS. Channels also listed for CEO alerts can raise high-confidence decision popups.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2 text-[11px]">
+          <StatusPill active={Boolean(health?.realtime_ingest_enabled)} label="Realtime ingest" />
+          <StatusPill active={Boolean(health?.ceo_decision_alerts_enabled)} label="CEO alerts" />
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+        <ConfigList title="Realtime ingest" items={realtime} empty="Set SLACK_REALTIME_INGEST_CHANNELS" />
+        <ConfigList title="CEO alert channels" items={alertChannels} empty="Set SLACK_CEO_DECISION_ALERT_CHANNELS" />
+        <div className="rounded-md border bg-[var(--background)]/40 p-3">
+          <div className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)]">
+            Channel map
+          </div>
+          {mapped.length === 0 ? (
+            <p className="mt-2 text-xs text-[var(--muted-foreground)]">No mapped channels yet.</p>
+          ) : (
+            <ul className="mt-2 space-y-1.5 text-xs">
+              {mapped.slice(0, 6).map(([channel, dept]) => (
+                <li key={channel} className="flex items-center justify-between gap-3">
+                  <span className="font-mono truncate">{channel}</span>
+                  <span className="text-[var(--muted-foreground)]">{dept}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function StatusPill({ active, label }: { active: boolean; label: string }) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${
+      active
+        ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+        : "border-[var(--border)] bg-[var(--muted)] text-[var(--muted-foreground)]"
+    }`}>
+      <span className={`size-1.5 rounded-full ${active ? "bg-emerald-500" : "bg-zinc-400"}`} />
+      {label}
+    </span>
+  );
+}
+
+function ConfigList({ title, items, empty }: { title: string; items: string[]; empty: string }) {
+  return (
+    <div className="rounded-md border bg-[var(--background)]/40 p-3">
+      <div className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)]">
+        {title}
+      </div>
+      {items.length === 0 ? (
+        <p className="mt-2 text-xs text-[var(--muted-foreground)]">{empty}</p>
+      ) : (
+        <ul className="mt-2 space-y-1.5 text-xs">
+          {items.map((item) => (
+            <li key={item} className="font-mono">{item}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function recordOfStrings(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item === "string") out[key] = item;
+  }
+  return out;
 }
 
 function ControlCard({ title, children }: { title: string; children: ReactNode }) {

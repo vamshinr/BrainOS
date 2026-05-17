@@ -29,6 +29,7 @@ const KIND_LABEL: Record<string, string> = {
   ingest_text: "text",
   ingest_file: "file",
   ingest_image: "image",
+  slack_realtime: "Slack",
 };
 
 const STATUS_DOT: Record<JobStatus, string> = {
