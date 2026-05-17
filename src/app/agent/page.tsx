@@ -284,7 +284,9 @@ function readStoredSession(): StoredSession | null {
   return null;
 }
 
-export default function AgentPage() {
+// BrainOS Agent feature is kept in the codebase, but the interactive page is disabled.
+// export default function AgentPage() {
+export function AgentPageDisabledImplementation() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -336,30 +338,32 @@ export default function AgentPage() {
       setLoading(true);
 
       try {
-        const res = await fetch("/api/agent", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId || undefined, message: trimmed }),
-        });
-
-        if (!res.ok) {
-          throw new Error(`Server error ${res.status}`);
-        }
-
-        const data = await res.json();
-
-        if (!sessionId && data.session_id) {
-          setSessionId(data.session_id);
-        }
-
-        const assistantMsg: Message = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: data.reply || "No response.",
-          toolsUsed: data.tools_used || [],
-        };
-
-        setMessages((prev) => [...prev.slice(0, -1), assistantMsg]);
+        // BrainOS Agent feature is kept in the codebase, but calls are disabled.
+        // const res = await fetch("/api/agent", {
+        //   method: "POST",
+        //   headers: { "Content-Type": "application/json" },
+        //   body: JSON.stringify({ session_id: sessionId || undefined, message: trimmed }),
+        // });
+        //
+        // if (!res.ok) {
+        //   throw new Error(`Server error ${res.status}`);
+        // }
+        //
+        // const data = await res.json();
+        //
+        // if (!sessionId && data.session_id) {
+        //   setSessionId(data.session_id);
+        // }
+        //
+        // const assistantMsg: Message = {
+        //   id: crypto.randomUUID(),
+        //   role: "assistant",
+        //   content: data.reply || "No response.",
+        //   toolsUsed: data.tools_used || [],
+        // };
+        //
+        // setMessages((prev) => [...prev.slice(0, -1), assistantMsg]);
+        throw new Error("BrainOS Agent feature is disabled");
       } catch (err) {
         const errMsg: Message = {
           id: crypto.randomUUID(),
@@ -372,7 +376,7 @@ export default function AgentPage() {
         setLoading(false);
       }
     },
-    [loading, sessionId]
+    [loading]
   );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -384,7 +388,8 @@ export default function AgentPage() {
 
   const clearSession = () => {
     if (sessionId) {
-      fetch(`/api/agent/session/${sessionId}`, { method: "DELETE" }).catch(() => {});
+      // BrainOS Agent feature is kept in the codebase, but session clearing is disabled.
+      // fetch(`/api/agent/session/${sessionId}`, { method: "DELETE" }).catch(() => {});
     }
     setMessages([]);
     setSessionId("");
@@ -472,5 +477,18 @@ export default function AgentPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function AgentPage() {
+  return (
+    <main className="flex min-h-[calc(100dvh-3.5rem)] items-center justify-center px-6 py-12 md:min-h-screen">
+      <section className="w-full max-w-xl rounded-lg border border-[var(--border)] bg-[var(--card)] p-6">
+        <h1 className="text-lg font-semibold">BrainOS Agent disabled</h1>
+        <p className="mt-2 text-sm leading-6 text-[var(--muted-foreground)]">
+          The autonomous agent feature is currently commented out in this build.
+        </p>
+      </section>
+    </main>
   );
 }

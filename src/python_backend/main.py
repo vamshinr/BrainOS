@@ -5298,7 +5298,8 @@ def cancel_job(job_id: str):
 # BrainOS Autonomous Agent — Gemma 4 on vLLM
 # ══════════════════════════════════════════════════════════════════════════════
 
-from brainos_agent import get_agent, init_agent
+# BrainOS Agent feature is kept in the codebase, but backend wiring is disabled.
+# from brainos_agent import get_agent, init_agent
 
 
 def _agent_ask_brain(question: str) -> dict:
@@ -5519,36 +5520,36 @@ def _agent_get_metrics() -> dict:
     }
 
 
-_brainos_agent = init_agent({
-    "ask_brain": _agent_ask_brain,
-    "ingest_text": _agent_ingest_text,
-    "analyze_gaps": _agent_analyze_gaps,
-    "get_graph_summary": _agent_get_graph_summary,
-    "export_skills": _agent_export_skills,
-    "detect_failures": _agent_detect_failures,
-    "get_metrics": _agent_get_metrics,
-})
-
-
-class AgentRequest(BaseModel):
-    session_id: Optional[str] = None
-    message: str
-
-
-@app.post("/api/agent")
-def agent_chat(req: AgentRequest):
-    session_id = req.session_id or str(uuid.uuid4())
-    try:
-        response = _brainos_agent.run(session_id=session_id, user_message=req.message)
-        return response.to_dict()
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Agent error: {e}")
-
-
-@app.delete("/api/agent/session/{session_id}")
-def clear_agent_session(session_id: str):
-    _brainos_agent.clear_session(session_id)
-    return {"ok": True, "cleared": session_id}
+# _brainos_agent = init_agent({
+#     "ask_brain": _agent_ask_brain,
+#     "ingest_text": _agent_ingest_text,
+#     "analyze_gaps": _agent_analyze_gaps,
+#     "get_graph_summary": _agent_get_graph_summary,
+#     "export_skills": _agent_export_skills,
+#     "detect_failures": _agent_detect_failures,
+#     "get_metrics": _agent_get_metrics,
+# })
+#
+#
+# class AgentRequest(BaseModel):
+#     session_id: Optional[str] = None
+#     message: str
+#
+#
+# @app.post("/api/agent")
+# def agent_chat(req: AgentRequest):
+#     session_id = req.session_id or str(uuid.uuid4())
+#     try:
+#         response = _brainos_agent.run(session_id=session_id, user_message=req.message)
+#         return response.to_dict()
+#     except Exception as e:
+#         raise HTTPException(status_code=503, detail=f"Agent error: {e}")
+#
+#
+# @app.delete("/api/agent/session/{session_id}")
+# def clear_agent_session(session_id: str):
+#     _brainos_agent.clear_session(session_id)
+#     return {"ok": True, "cleared": session_id}
 
 
 if __name__ == "__main__":
