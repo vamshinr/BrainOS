@@ -1,26 +1,63 @@
 import Link from "next/link";
 import { readState } from "@/lib/store";
-import { GraphView } from "@/components/graph-view";
+import { GraphView, type SourceTag } from "@/components/graph-view";
 import type { EntityKind } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+
+// Map every source kind to a coarse "where this came from" tag so the map
+// filter is just two buckets the user understands (docs vs slack).
+const DOC_KINDS = new Set(["doc", "pdf", "file", "text", "code", "image"]);
+function sourceTagFromKind(kind: string | undefined): SourceTag | null {
+  if (!kind) return null;
+  if (kind === "slack") return "slack";
+  if (DOC_KINDS.has(kind)) return "doc";
+  return null;
+}
 
 export default async function GraphPage() {
   const state = await readState();
   const fresh = state.units.filter((u) => !u.stale && !u.supersededBy);
   const rels = state.relationships ?? [];
 
-  // Build entity index with ref counts
-  const entityIndex = new Map<string, { kind: EntityKind; refCount: number }>();
+  // Index sources by id so we can resolve evidence → source kind cheaply.
+  const sourceKindById = new Map<string, string>();
+  for (const s of state.sources) sourceKindById.set(s.id, s.kind);
+
+  // Build entity index with ref counts AND the set of source tags that
+  // contributed to it (via the units it appears in, which carry evidence
+  // pointing at sources, which know their kind).
+  const entityIndex = new Map<
+    string,
+    { kind: EntityKind; refCount: number; sources: Set<SourceTag> }
+  >();
   for (const e of state.entities) {
-    entityIndex.set(e.name.toLowerCase(), { kind: e.kind, refCount: 0 });
+    entityIndex.set(e.name.toLowerCase(), {
+      kind: e.kind,
+      refCount: 0,
+      sources: new Set<SourceTag>(),
+    });
   }
   for (const u of fresh) {
+    const unitTags = new Set<SourceTag>();
+    for (const ev of u.evidence ?? []) {
+      if (!ev?.sourceId) continue;
+      const tag = sourceTagFromKind(sourceKindById.get(ev.sourceId));
+      if (tag) unitTags.add(tag);
+    }
     for (const name of u.entities) {
       const k = name.toLowerCase();
       const cur = entityIndex.get(k);
-      if (cur) cur.refCount += 1;
-      else entityIndex.set(k, { kind: "concept", refCount: 1 });
+      if (cur) {
+        cur.refCount += 1;
+        unitTags.forEach((t) => cur.sources.add(t));
+      } else {
+        entityIndex.set(k, {
+          kind: "concept",
+          refCount: 1,
+          sources: new Set<SourceTag>(unitTags),
+        });
+      }
     }
   }
 
@@ -28,6 +65,7 @@ export default async function GraphPage() {
     name: state.entities.find((e) => e.name.toLowerCase() === name)?.name ?? name,
     kind: info.kind,
     refCount: info.refCount,
+    sources: Array.from(info.sources) as SourceTag[],
   }));
 
   // Prefer explicit relationships; fall back to co-mention edges

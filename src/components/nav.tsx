@@ -5,11 +5,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ThemeToggle } from "@/components/theme-toggle";
 
-const NAV: { href: string; label: string; hint: string }[] = [
+type NavItem = { href: string; label: string; hint: string };
+
+const BASE_NAV: NavItem[] = [
   { href: "/", label: "Brain", hint: "Overview" },
   // BrainOS Agent feature is kept in the codebase, but hidden from navigation.
   // { href: "/agent", label: "Agent", hint: "Autonomous AI · Gemma 4" },
-  { href: "/onboarding", label: "Onboard", hint: "Docs + Slack setup" },
   { href: "/ingest", label: "Ingest", hint: "Capture knowledge" },
   { href: "/failures", label: "Traps", hint: "Loop memory" },
   { href: "/graph", label: "Map", hint: "Entities & links" },
@@ -20,9 +21,36 @@ const NAV: { href: string; label: string; hint: string }[] = [
   { href: "/metrics", label: "GPU", hint: "AMD MI300X live stats" },
 ];
 
+const ONBOARD_NAV: NavItem = {
+  href: "/welcome",
+  label: "Onboard",
+  hint: "Customer setup wizard",
+};
+
 export function Nav() {
   const [open, setOpen] = useState(false);
+  const [onboarded, setOnboarded] = useState<boolean | null>(null);
   const pathname = usePathname();
+
+  // Poll the onboarding state so the "Onboard" tab disappears once the user
+  // finishes the wizard, and reappears if they reset it via Settings.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetch("/api/onboarding/state", { cache: "no-store" })
+        .then((r) => r.json())
+        .then((d) => {
+          if (!cancelled) setOnboarded(!!d.complete);
+        })
+        .catch(() => {});
+    };
+    load();
+    const id = setInterval(load, 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
 
   useEffect(() => {
     queueMicrotask(() => setOpen(false));
@@ -39,6 +67,10 @@ export function Nav() {
       document.body.style.overflow = prevOverflow;
     };
   }, [open]);
+
+  // Build the visible nav: hide "Onboard" once onboarding is complete.
+  // Default to hiding during initial load to avoid a flash for completed users.
+  const navItems: NavItem[] = onboarded === false ? [BASE_NAV[0], ONBOARD_NAV, ...BASE_NAV.slice(1)] : BASE_NAV;
 
   return (
     <>
@@ -93,7 +125,7 @@ export function Nav() {
                 </svg>
               </button>
             </div>
-            <NavList pathname={pathname} />
+            <NavList pathname={pathname} items={navItems} />
             <div className="mt-6 pt-6 border-t border-[var(--border)]">
               <ThemeToggle />
             </div>
@@ -118,7 +150,7 @@ export function Nav() {
         </Link>
 
         <nav className="mt-8 flex flex-col gap-1">
-          <NavList pathname={pathname} />
+          <NavList pathname={pathname} items={navItems} />
         </nav>
 
         <div className="absolute bottom-6 left-5 right-5 space-y-4">
@@ -133,10 +165,16 @@ export function Nav() {
   );
 }
 
-function NavList({ pathname }: { pathname: string }) {
+function NavList({
+  pathname,
+  items,
+}: {
+  pathname: string;
+  items: NavItem[];
+}) {
   return (
     <nav className="flex flex-col gap-1">
-      {NAV.map((item) => {
+      {items.map((item) => {
         const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
         return (
           <Link

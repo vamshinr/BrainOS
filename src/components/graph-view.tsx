@@ -3,7 +3,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EntityKind } from "@/lib/types";
 
-type Node = { name: string; kind: EntityKind; refCount: number };
+export type SourceTag = "slack" | "doc";
+
+type Node = {
+  name: string;
+  kind: EntityKind;
+  refCount: number;
+  /** Tags of source kinds that contributed evidence to units mentioning
+   *  this entity. Used by the docs/slack filter pills. */
+  sources?: SourceTag[];
+};
 type Edge = { a: string; b: string; weight: number; label?: string };
 
 const KIND_COLOR: Record<string, string> = {
@@ -129,6 +138,33 @@ export function GraphView({
   const [selected, setSelected] = useState<string | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [isFull, setIsFull] = useState(false);
+
+  // Source-type filter chips. Empty set OR both flipped on = "show all"
+  // (no dimming). Picking just one bucket dims everything that didn't come
+  // from that source.
+  const [sourceFilter, setSourceFilter] = useState<Set<SourceTag>>(new Set());
+  const filteringBySource = sourceFilter.size > 0 && sourceFilter.size < 2;
+
+  const toggleSourceFilter = useCallback((tag: SourceTag) => {
+    setSourceFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
+      return next;
+    });
+  }, []);
+
+  // Per-entity: does this node belong to the active source filter? When the
+  // filter is inactive (size 0 or 2), every node is considered "in".
+  const nodeInFilter = useCallback(
+    (n: Node) => {
+      if (!filteringBySource) return true;
+      const tags = n.sources ?? [];
+      for (const t of tags) if (sourceFilter.has(t)) return true;
+      return false;
+    },
+    [filteringBySource, sourceFilter],
+  );
 
   const isPanning = useRef(false);
   const didMove = useRef(false);
@@ -311,7 +347,11 @@ export function GraphView({
             const hi = connSet
               ? connSet.has(a.name.toLowerCase()) && connSet.has(b.name.toLowerCase())
               : false;
-            const dim = !!connSet && !hi;
+            // An edge is dim if either selection/hover or the source filter
+            // says one of its endpoints is out.
+            const filterDimA = filteringBySource && !nodeInFilter(a);
+            const filterDimB = filteringBySource && !nodeInFilter(b);
+            const dim = (!!connSet && !hi) || filterDimA || filterDimB;
 
             if (hasExplicitRels) {
               const { d, lx, ly } = edgePath(a.x, a.y, b.x, b.y, a.r, b.r);
@@ -365,8 +405,14 @@ export function GraphView({
           {pnodes.map(p => {
             const isSel = selected?.toLowerCase() === p.name.toLowerCase();
             const isHov = hovered?.toLowerCase() === p.name.toLowerCase();
-            const dim = !!connSet && !connSet.has(p.name.toLowerCase());
-            const hi = isSel || isHov;
+            const inFilter = nodeInFilter(p);
+            const dim =
+              (!!connSet && !connSet.has(p.name.toLowerCase())) ||
+              (filteringBySource && !inFilter);
+            // Highlight a node when it's the active source-filter match and
+            // there's nothing else selected/hovered to compete with it.
+            const filterHi = filteringBySource && inFilter && !connSet;
+            const hi = isSel || isHov || filterHi;
 
             return (
               <g
@@ -441,7 +487,7 @@ export function GraphView({
       </div>
 
       {/* ── Legend (top-left) ── */}
-      <div className="absolute top-3 left-3 z-10 rounded-lg border border-[var(--border)] bg-[var(--background)]/90 backdrop-blur-sm px-3 py-2.5 text-[11px] min-w-[140px]">
+      <div className="absolute top-3 left-3 z-10 rounded-lg border border-[var(--border)] bg-[var(--background)]/90 backdrop-blur-sm px-3 py-2.5 text-[11px] min-w-[180px]">
         <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
           {hasExplicitRels ? "Knowledge graph" : "Co-mention graph"}
         </div>
@@ -456,6 +502,14 @@ export function GraphView({
             </div>
           ))}
         </div>
+
+        {/* Source-type filter — highlights nodes drawn from docs or slack. */}
+        <SourceFilter
+          nodes={nodes}
+          active={sourceFilter}
+          onToggle={toggleSourceFilter}
+        />
+
         {hasExplicitRels && (
           <div className="mt-2 pt-2 border-t border-[var(--border)] flex items-center gap-1 text-[var(--muted-foreground)]">
             <span className="text-[var(--accent)] font-bold">→</span>
@@ -526,6 +580,78 @@ export function GraphView({
           No entities yet — ingest content to build the map.
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Source-type filter chips ───────────────────────────────────────────────────
+
+const SOURCE_TAGS: { tag: SourceTag; label: string; swatch: string }[] = [
+  { tag: "doc", label: "Docs", swatch: "#60a5fa" },
+  { tag: "slack", label: "Slack", swatch: "#a78bfa" },
+];
+
+function SourceFilter({
+  nodes,
+  active,
+  onToggle,
+}: {
+  nodes: Node[];
+  active: Set<SourceTag>;
+  onToggle: (t: SourceTag) => void;
+}) {
+  // Per-tag counts so the user sees how many entities each filter will match.
+  const counts = useMemo(() => {
+    const out: Record<SourceTag, number> = { doc: 0, slack: 0 };
+    for (const n of nodes) {
+      for (const t of n.sources ?? []) {
+        if (t in out) out[t] += 1;
+      }
+    }
+    return out;
+  }, [nodes]);
+
+  const anyTagged = counts.doc + counts.slack > 0;
+  if (!anyTagged) return null;
+
+  return (
+    <div className="mt-2 pt-2 border-t border-[var(--border)]">
+      <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--muted-foreground)] mb-1.5">
+        Filter by source
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {SOURCE_TAGS.map(({ tag, label, swatch }) => {
+          const isActive = active.has(tag);
+          return (
+            <button
+              key={tag}
+              type="button"
+              onClick={() => onToggle(tag)}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] transition-colors ${
+                isActive
+                  ? "border-[var(--accent)] bg-[var(--accent)]/15 text-[var(--foreground)]"
+                  : "border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+              }`}
+              aria-pressed={isActive}
+            >
+              <span
+                className="size-1.5 rounded-full"
+                style={{ background: swatch }}
+                aria-hidden
+              />
+              {label}
+              <span className="font-mono tabular-nums opacity-70">{counts[tag]}</span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-1.5 text-[10px] leading-tight text-[var(--muted-foreground)]">
+        {active.size === 0
+          ? "Click a tag to highlight its entities"
+          : active.size === 2
+            ? "Showing all"
+            : `Highlighting ${active.size === 1 ? "one" : "both"} source${active.size === 1 ? "" : "s"}`}
+      </p>
     </div>
   );
 }

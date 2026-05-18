@@ -19,7 +19,7 @@ import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 import httpx
 import uvicorn
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -100,7 +100,18 @@ class _Models:
 class VLLMClient:
     def __init__(self, base_url: str, timeout: float = 600.0):
         self.base_url = base_url.rstrip("/")
-        self._http = httpx.Client(base_url=self.base_url, timeout=timeout)
+        # Pass OPENAI_API_KEY when present so this client also works against
+        # OpenAI's API (and any OpenAI-compatible endpoint that requires a
+        # bearer token). Self-hosted vLLM servers ignore the header.
+        headers: dict[str, str] = {}
+        _key = os.getenv("OPENAI_API_KEY", "").strip()
+        if _key:
+            headers["Authorization"] = f"Bearer {_key}"
+        self._http = httpx.Client(
+            base_url=self.base_url,
+            timeout=timeout,
+            headers=headers or None,
+        )
         self.chat = _Chat(self._http)
         self.embeddings = _Embeddings(self._http)
         self.models = _Models(self._http)
@@ -5069,6 +5080,211 @@ def _is_sensitive(query: str) -> str | None:
 
 
 from integrations.slack_routes import create_slack_router
+from slack_mcp.auth import load_slack_config
+from slack_mcp.web_poller import (
+    run_poller as _run_slack_poller,
+    get_poller_status as _get_slack_poller_status,
+)
+
+
+@app.post("/api/slack/resync")
+async def slack_resync(limit: int = 50):
+    """Backfill recent Slack history into the brain. Used after a brain reset
+    so the user isn't left with an empty knowledge base while waiting for the
+    poller to pick up new messages.
+
+    For each configured channel:
+      1. Fetch the latest `limit` messages from conversations.history
+      2. Filter out bot/self/subtype/empty messages
+      3. Push each through the realtime ingest pipeline so they land in
+         ChromaDB + brain.json with the same shape as polled messages
+      4. Reset the poller's last_seen_ts file so future polls keep going from
+         here without skipping anything
+
+    Returns a summary of how many messages were fetched and enqueued per
+    channel.
+    """
+    from slack_mcp.web_poller import _bot_token, _build_doc, POLLER_STATE_FILE
+    token = _bot_token()
+    if not token:
+        raise HTTPException(status_code=400, detail="no Slack bot token configured")
+
+    cfg = load_slack_config()
+    channels = sorted(
+        set(cfg.realtime_ingest_channels) | set(cfg.channel_map.keys())
+    )
+    # Discover the bot's own user id so we can filter its replies out.
+    bot_user_id: str | None = None
+    async with httpx.AsyncClient(timeout=15.0) as c:
+        try:
+            r = await c.post(
+                "https://slack.com/api/auth.test",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            jj = r.json()
+            if jj.get("ok"):
+                bot_user_id = jj.get("user_id")
+        except Exception:
+            pass
+
+    summary: list[dict] = []
+    newest_per_channel: dict[str, str] = {}
+
+    async with httpx.AsyncClient(timeout=30.0) as c:
+        for ch in channels:
+            if not cfg.channel_allowed(ch):
+                summary.append({"channel_id": ch, "skipped": "not_allowed"})
+                continue
+            try:
+                r = await c.get(
+                    "https://slack.com/api/conversations.history",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"channel": ch, "limit": max(1, min(int(limit), 200))},
+                )
+                j = r.json()
+            except Exception as e:
+                summary.append({"channel_id": ch, "error": str(e)})
+                continue
+            if not j.get("ok"):
+                summary.append({"channel_id": ch, "error": j.get("error")})
+                continue
+
+            messages = j.get("messages") or []
+            # Slack returns newest-first; reverse so the brain ingests them
+            # in chronological order (and the newest ts is captured last).
+            messages.reverse()
+            fetched = len(messages)
+            enqueued = 0
+            department = cfg.department_for_channel(ch)
+            ceo_alerts = ch in cfg.ceo_decision_alert_channels
+            for m in messages:
+                ts = str(m.get("ts") or "")
+                if not ts:
+                    continue
+                newest_per_channel[ch] = ts
+                if m.get("subtype") or m.get("bot_id"):
+                    continue
+                if bot_user_id and m.get("user") == bot_user_id:
+                    continue
+                text = str(m.get("text") or "").strip()
+                if not text:
+                    continue
+                event_like = {
+                    "type": "message",
+                    "ts": ts,
+                    "thread_ts": m.get("thread_ts"),
+                    "user": m.get("user"),
+                    "channel": ch,
+                    "text": text,
+                }
+                doc = _build_doc(
+                    event=event_like,
+                    channel_id=ch,
+                    channel_name=ch,
+                    department=department,
+                    text=text,
+                )
+                try:
+                    _enqueue_slack_realtime_ingest(doc, ceo_alerts)
+                    enqueued += 1
+                except Exception as e:
+                    print(f"[BrainOS] resync enqueue failed for {ch}/{ts}: {e}")
+            summary.append({
+                "channel_id": ch,
+                "fetched": fetched,
+                "enqueued": enqueued,
+            })
+
+    # Update the poller's last_seen file so it doesn't re-process the same
+    # messages on its next tick.
+    try:
+        POLLER_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        existing = {}
+        if POLLER_STATE_FILE.exists():
+            try:
+                existing = json.loads(POLLER_STATE_FILE.read_text()) or {}
+            except Exception:
+                existing = {}
+        last_seen = existing.get("last_seen_ts") or {}
+        last_seen.update(newest_per_channel)
+        POLLER_STATE_FILE.write_text(json.dumps({"last_seen_ts": last_seen}, indent=2))
+    except Exception as e:
+        print(f"[BrainOS] WARNING: could not update poller state file: {e}")
+
+    return {"ok": True, "channels": summary}
+
+
+@app.get("/api/slack/channels")
+async def slack_channels_info():
+    """Resolve channel_id → channel_name for every configured channel via
+    Slack's conversations.info. Cached for 60s to spare the rate limiter.
+    UI uses this to show human-readable channel names everywhere instead of
+    the bare C-prefixed IDs."""
+    import time as _time
+    global _channels_cache, _channels_cache_at  # type: ignore[name-defined]
+    now = _time.time()
+    try:
+        if _channels_cache and (now - _channels_cache_at) < 60.0:
+            return {"channels": _channels_cache, "cached": True}
+    except NameError:
+        pass
+
+    cfg = load_slack_config()
+    ids = sorted(
+        set(cfg.realtime_ingest_channels)
+        | set(cfg.allowed_channels)
+        | set(cfg.channel_map.keys())
+    )
+    # Pick the bot token via the same helper the poller uses.
+    from slack_mcp.web_poller import _bot_token
+    token = _bot_token()
+    out = []
+    if token and ids:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            for cid in ids:
+                try:
+                    r = await c.get(
+                        "https://slack.com/api/conversations.info",
+                        headers={"Authorization": f"Bearer {token}"},
+                        params={"channel": cid},
+                    )
+                    j = r.json()
+                    if j.get("ok"):
+                        ch = j.get("channel") or {}
+                        out.append({
+                            "id": cid,
+                            "name": ch.get("name") or cid,
+                            "is_private": bool(ch.get("is_private")),
+                            "topic": (ch.get("topic") or {}).get("value") or None,
+                        })
+                    else:
+                        out.append({"id": cid, "name": cid, "error": j.get("error")})
+                except Exception as e:
+                    out.append({"id": cid, "name": cid, "error": str(e)})
+    else:
+        out = [{"id": cid, "name": cid} for cid in ids]
+
+    _channels_cache = out  # type: ignore[name-defined]
+    _channels_cache_at = now  # type: ignore[name-defined]
+    return {"channels": out, "cached": False}
+
+
+@app.get("/api/slack/poller/status")
+def slack_poller_status():
+    """Snapshot of the polling background task — tick count, last poll time,
+    dispatch totals, last-seen ts per channel. Cheap; safe to poll from UI."""
+    s = _get_slack_poller_status()
+    # Make times human-friendly alongside the raw epoch seconds.
+    import datetime as _dt
+    def _fmt(ts):
+        if not ts: return None
+        return _dt.datetime.fromtimestamp(ts, _dt.timezone.utc).isoformat()
+    s["started_at_iso"] = _fmt(s.get("started_at"))
+    s["last_poll_at_iso"] = _fmt(s.get("last_poll_at"))
+    s["last_dispatch_at_iso"] = _fmt(s.get("last_dispatch_at"))
+    if s.get("last_poll_at"):
+        s["seconds_since_last_poll"] = round(time.time() - s["last_poll_at"], 2)
+    return s
 
 app.include_router(create_slack_router(
     ingest_agent=ingest_agent,
@@ -5082,6 +5298,221 @@ app.include_router(create_slack_router(
     is_sensitive=_is_sensitive,
     enqueue_realtime_ingest=_enqueue_slack_realtime_ingest,
 ))
+
+
+# ── Slack polling fallback ────────────────────────────────────────────────────
+# Fires `conversations.history` on a fixed interval for each mapped channel
+# and feeds new messages into the same realtime-ingest pipeline as the webhook.
+# Use when the Slack app's Event Subscriptions URL can't be pointed at this
+# backend (e.g. local dev without a tunnel, or no app collaborator access).
+# The poller now waits for credentials at startup instead of bailing — so the
+# onboarding UI can light it up later without a backend restart.
+@app.on_event("startup")
+async def _start_slack_poller() -> None:
+    import asyncio as _asyncio
+    if os.getenv("SLACK_POLLER_ENABLED", "true").strip().lower() not in ("1", "true", "yes", "on"):
+        print("[BrainOS] slack web poller: disabled via SLACK_POLLER_ENABLED")
+        return
+    try:
+        interval = float(os.getenv("SLACK_POLLER_INTERVAL_S", "15"))
+    except ValueError:
+        interval = 15.0
+    _asyncio.create_task(
+        _run_slack_poller(
+            config_loader=load_slack_config,
+            enqueue_fn=_enqueue_slack_realtime_ingest,
+            debug_event_fn=_debug_event,
+            interval_s=interval,
+        )
+    )
+
+
+# ── Onboarding endpoints (customer-facing setup flow) ─────────────────────────
+# The frontend reads /state to decide whether to show the onboarding wizard
+# or the dashboard. /slack/save lets the wizard wire up Slack with just the
+# essentials — bot token + channel IDs — no MCP, no signing secret, no app id.
+ONBOARDING_FILE = os.path.join(DATA_DIR, "onboarding.json")
+SLACK_TOKEN_FILE = os.path.join(DATA_DIR, "slack", "oauth_tokens.json")
+SLACK_CHANNEL_MAP_FILE = os.path.join(DATA_DIR, "slack", "channel_map.json")
+
+
+def _read_onboarding_record() -> dict:
+    try:
+        with open(ONBOARDING_FILE, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}
+
+
+def _write_onboarding_record(data: dict) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(ONBOARDING_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+_DOC_KINDS = {"doc", "pdf", "file", "text", "code", "image"}
+
+
+@app.get("/api/onboarding/state")
+def onboarding_state():
+    """Derived onboarding state — fresh on every request from the actual brain
+    + Slack config. Front-end uses this to gate the dashboard.
+
+    "Slack ready" means: we have *some* way to talk to Slack AND at least one
+    channel to listen to. The wizard intentionally only collects a bot token
+    (xoxb-…) and skips the MCP user token, so cfg.configured (which only
+    looks at the MCP access_token) isn't sufficient on its own. A bot token
+    discovered by the poller's resolver counts just as much.
+    """
+    from slack_mcp.web_poller import _bot_token
+    brain = _read_brain()
+    sources = brain.get("sources", []) or []
+    doc_sources = [s for s in sources if (s.get("kind") or "").lower() in _DOC_KINDS]
+    cfg = load_slack_config()
+    slack_channels = sorted(cfg.realtime_ingest_channels) or sorted(cfg.channel_map.keys()) or sorted(cfg.allowed_channels)
+    has_bot_token = bool(_bot_token())
+    slack_configured = bool(cfg.configured) or has_bot_token
+    docs_ready = len(doc_sources) > 0
+    slack_ready = slack_configured and bool(slack_channels)
+    record = _read_onboarding_record()
+    completed_at = record.get("completedAt")
+    return {
+        "docsReady": docs_ready,
+        "slackReady": slack_ready,
+        "docsCount": len(doc_sources),
+        "slackChannels": slack_channels,
+        "slackConfigured": slack_configured,
+        "completedAt": completed_at,
+        "complete": bool(completed_at) and docs_ready and slack_ready,
+    }
+
+
+@app.post("/api/onboarding/complete")
+def onboarding_complete():
+    """Mark onboarding done. Idempotent."""
+    record = _read_onboarding_record()
+    if not record.get("completedAt"):
+        record["completedAt"] = _utc_now_iso()
+    _write_onboarding_record(record)
+    return record
+
+
+@app.post("/api/onboarding/reset")
+def onboarding_reset():
+    """Wipe the completion marker so the wizard shows again. Brain & Slack
+    config stay intact."""
+    try:
+        os.remove(ONBOARDING_FILE)
+    except FileNotFoundError:
+        pass
+    return {"ok": True}
+
+
+@app.post("/api/onboarding/slack/save")
+async def onboarding_save_slack(request: Request):
+    """Minimal Slack setup. Requires only a bot token (xoxb-…) and one or
+    more channel IDs. Validates against Slack auth.test, persists to JSON,
+    bumps env so the poller picks them up on its next cycle."""
+    body = await request.json()
+    bot_token = str(body.get("bot_token") or "").strip()
+    channels = body.get("channels") or []
+    if isinstance(channels, str):
+        channels = [c.strip() for c in channels.split(",") if c.strip()]
+    default_dept = (str(body.get("default_department") or "general")).strip() or "general"
+
+    if not bot_token.startswith("xoxb-"):
+        raise HTTPException(status_code=400, detail="bot_token must start with xoxb-")
+    if not isinstance(channels, list) or not channels:
+        raise HTTPException(status_code=400, detail="channels must be a non-empty list")
+
+    # Validate by calling Slack auth.test. Surfaces invalid tokens immediately
+    # to the UI rather than failing silently in the poller.
+    async with httpx.AsyncClient(timeout=15.0) as c:
+        try:
+            r = await c.post(
+                "https://slack.com/api/auth.test",
+                headers={"Authorization": f"Bearer {bot_token}"},
+            )
+            j = r.json()
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"slack unreachable: {e}") from e
+    if not j.get("ok"):
+        raise HTTPException(status_code=400, detail=f"slack auth.test failed: {j.get('error')}")
+
+    bot_user_id = j.get("user_id")
+    team_id = j.get("team_id")
+    team_name = j.get("team")
+
+    # Persist token + bot user id to JSON. The web poller reads from here when
+    # SLACK_BOT_TOKEN env isn't set; auth.py also reads from here for the MCP
+    # access token fallback chain.
+    os.makedirs(os.path.dirname(SLACK_TOKEN_FILE), exist_ok=True)
+    existing = {}
+    try:
+        with open(SLACK_TOKEN_FILE, "r", encoding="utf-8") as f:
+            existing = json.load(f) or {}
+    except FileNotFoundError:
+        pass
+    existing["bot_token"] = bot_token
+    existing["bot_user_id"] = bot_user_id
+    existing["team_id"] = team_id
+    existing["team_name"] = team_name
+    with open(SLACK_TOKEN_FILE, "w", encoding="utf-8") as f:
+        json.dump(existing, f, indent=2)
+
+    # Map every channel to the chosen default department.
+    cmap = {}
+    try:
+        with open(SLACK_CHANNEL_MAP_FILE, "r", encoding="utf-8") as f:
+            cmap = json.load(f) or {}
+    except FileNotFoundError:
+        pass
+    for ch in channels:
+        cmap[ch] = cmap.get(ch) or default_dept
+    with open(SLACK_CHANNEL_MAP_FILE, "w", encoding="utf-8") as f:
+        json.dump(cmap, f, indent=2)
+
+    # Bump env so the poller's next config_loader() call sees these channels.
+    def _merge_env(key: str, new_items: list[str]) -> None:
+        existing_items = {x.strip() for x in (os.environ.get(key) or "").split(",") if x.strip()}
+        existing_items.update(new_items)
+        os.environ[key] = ",".join(sorted(existing_items))
+
+    _merge_env("SLACK_ALLOWED_CHANNELS", channels)
+    _merge_env("SLACK_REALTIME_INGEST_CHANNELS", channels)
+    if not os.getenv("SLACK_DEFAULT_DEPARTMENT"):
+        os.environ["SLACK_DEFAULT_DEPARTMENT"] = default_dept
+
+    # Backfill the most recent messages for each channel so the brain has
+    # context immediately rather than waiting for new traffic.
+    backfill_summary = []
+    async with httpx.AsyncClient(timeout=30.0) as c:
+        for ch in channels:
+            try:
+                rr = await c.get(
+                    "https://slack.com/api/conversations.history",
+                    headers={"Authorization": f"Bearer {bot_token}"},
+                    params={"channel": ch, "limit": 50},
+                )
+                jj = rr.json()
+                if jj.get("ok"):
+                    backfill_summary.append({"channel_id": ch, "fetched": len(jj.get("messages") or [])})
+                else:
+                    backfill_summary.append({"channel_id": ch, "error": jj.get("error")})
+            except Exception as e:
+                backfill_summary.append({"channel_id": ch, "error": str(e)})
+
+    return {
+        "ok": True,
+        "bot_user_id": bot_user_id,
+        "team_id": team_id,
+        "team_name": team_name,
+        "channels": sorted(channels),
+        "default_department": default_dept,
+        "backfill": backfill_summary,
+    }
 
 
 @app.get("/api/skills_export")

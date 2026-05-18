@@ -164,6 +164,8 @@ export default function SlackPage() {
 
       <RealtimeDecisionAlerts health={health} />
 
+      <RecentSlackMessages />
+
       <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <ControlCard title="Shared Slack Context">
           <LabeledInput label="Channel ID" value={channelId} onChange={setChannelId} placeholder="C1234567890" />
@@ -383,5 +385,199 @@ function LabeledInput({
         className="mt-1 w-full rounded-md border bg-transparent px-3 py-2 text-sm text-[var(--foreground)]"
       />
     </label>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Recent Slack messages — reads /api/state every 5s, filters slack sources,
+// parses the actual message body out of `content`, and renders the latest 10.
+// `content` shape produced by both the webhook handler and the web poller:
+//
+//   Slack Realtime: <channel> / <ts>\n\n
+//   channel: ...\n channel_id: ...\n thread_ts: ...\n department: ...\n\n
+//   <user_id> [<ts>]\n
+//   <message text>
+//
+// We split on "\n\n", take the last block, strip the "<user> [<ts>]" header.
+
+type SlackSource = {
+  id: string;
+  capturedAt?: string;
+  channelId?: string;
+  channelName?: string;
+  threadTs?: string;
+  department?: string;
+  content?: string;
+};
+
+type ParsedSlackMessage = {
+  id: string;
+  capturedAt: string;
+  channelId: string;
+  channelName: string;
+  department: string;
+  threadTs: string | null;
+  user: string;
+  text: string;
+};
+
+function parseSlackContent(s: SlackSource): ParsedSlackMessage {
+  const content = s.content || "";
+  const blocks = content.split("\n\n");
+  let user = "";
+  let text = content;
+  if (blocks.length >= 3) {
+    const last = blocks[blocks.length - 1];
+    const firstNl = last.indexOf("\n");
+    if (firstNl >= 0) {
+      const header = last.slice(0, firstNl);
+      // "U0B2LN61Z0B [1779088460.345389]"
+      user = header.split(" ")[0] || "";
+      text = last.slice(firstNl + 1).trim();
+    } else {
+      text = last.trim();
+    }
+  }
+  return {
+    id: s.id,
+    capturedAt: s.capturedAt || "",
+    channelId: s.channelId || "",
+    channelName: s.channelName || s.channelId || "",
+    department: s.department || "",
+    threadTs: s.threadTs || null,
+    user,
+    text,
+  };
+}
+
+function formatRelative(iso: string): string {
+  if (!iso) return "";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "just now";
+  const s = Math.round(ms / 1000);
+  if (s < 5) return "just now";
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return new Date(iso).toLocaleString();
+}
+
+function RecentSlackMessages() {
+  const [messages, setMessages] = useState<ParsedSlackMessage[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetch("/api/state", { cache: "no-store" });
+        const data = await res.json();
+        const slack: SlackSource[] = (data.sources || []).filter(
+          (s: { kind?: string }) => s.kind === "slack",
+        );
+        slack.sort((a, b) =>
+          (a.capturedAt || "") < (b.capturedAt || "") ? 1 : -1,
+        );
+        const parsed = slack.slice(0, 10).map(parseSlackContent);
+        if (!cancelled) {
+          setMessages(parsed);
+          setLoaded(true);
+          setError(null);
+        }
+      } catch (e) {
+        if (!cancelled) setError(String(e));
+      }
+    };
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  const freshCount = messages.filter((m) => {
+    const ms = Date.now() - new Date(m.capturedAt).getTime();
+    return Number.isFinite(ms) && ms < 30_000;
+  }).length;
+
+  return (
+    <section className="mt-6 rounded-lg border bg-[var(--card)] p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span
+            className={`size-1.5 rounded-full ${
+              freshCount > 0
+                ? "bg-emerald-500 animate-pulse"
+                : "bg-zinc-400"
+            }`}
+            aria-hidden
+          />
+          <h2 className="font-semibold">Recent Slack messages</h2>
+          {freshCount > 0 && (
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+              {freshCount} new
+            </span>
+          )}
+        </div>
+        <span className="text-[11px] text-[var(--muted-foreground)]">
+          Polled every 5s · showing latest {messages.length}
+        </span>
+      </div>
+
+      <div className="mt-3">
+        {!loaded ? (
+          <p className="text-sm text-[var(--muted-foreground)]">Loading…</p>
+        ) : error ? (
+          <p className="text-sm text-red-600">Failed to load: {error}</p>
+        ) : messages.length === 0 ? (
+          <p className="text-sm text-[var(--muted-foreground)]">
+            No Slack messages ingested yet. Post something in a mapped channel
+            and it will appear here within 5 seconds.
+          </p>
+        ) : (
+          <ul className="divide-y divide-[var(--border)]">
+            {messages.map((m) => {
+              const fresh = (() => {
+                const ms = Date.now() - new Date(m.capturedAt).getTime();
+                return Number.isFinite(ms) && ms < 30_000;
+              })();
+              return (
+                <li key={m.id} className="py-3 first:pt-0 last:pb-0">
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--muted-foreground)]">
+                    <span className="font-mono">#{m.channelName || m.channelId}</span>
+                    {m.department && (
+                      <>
+                        <span aria-hidden>·</span>
+                        <span>{m.department}</span>
+                      </>
+                    )}
+                    {m.user && (
+                      <>
+                        <span aria-hidden>·</span>
+                        <span className="font-mono">{m.user}</span>
+                      </>
+                    )}
+                    <span aria-hidden>·</span>
+                    <span>{formatRelative(m.capturedAt)}</span>
+                    {fresh && (
+                      <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                        new
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 whitespace-pre-wrap text-sm leading-snug">
+                    {m.text}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }
