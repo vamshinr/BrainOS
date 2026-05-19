@@ -302,7 +302,7 @@ export default function IngestPage() {
         <form onSubmit={submitFile} className="mt-8 space-y-4">
           <div className="rounded-md border border-zinc-200 bg-zinc-50 dark:bg-zinc-900/30 dark:border-zinc-700 px-4 py-3 text-sm text-zinc-700 dark:text-zinc-300">
             Upload a <strong>PDF</strong>, <strong>Word doc</strong>, <strong>.txt</strong>, <strong>.md</strong>, or <strong>.csv</strong> file.
-            The 70B model on the AMD MI300X extracts knowledge units and reconciles them against what the brain already knows.
+            The model extracts knowledge units and reconciles them against what the brain already knows.
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">
@@ -371,7 +371,7 @@ export default function IngestPage() {
           <div className="rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 px-4 py-3 text-sm text-blue-800 dark:text-blue-300">
             <span className="font-medium">VLM pipeline</span> — Upload a screenshot, architecture diagram,
             whiteboard photo, or slide. The vision model describes it, then the 70B model extracts
-            knowledge units. Both run on the AMD MI300X.
+            knowledge units.
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">

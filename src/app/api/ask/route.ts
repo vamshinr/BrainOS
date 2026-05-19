@@ -8,6 +8,7 @@ export const maxDuration = 300;
 const Body = z.object({
   question: z.string().min(1),
   model: z.string().optional(),
+  as_of: z.string().optional(),
 });
 
 export async function POST(req: Request) {
@@ -22,7 +23,7 @@ export async function POST(req: Request) {
     const backendRes = await fetch(`${BACKEND_URL}/api/ask`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: body.question, model: body.model }),
+      body: JSON.stringify({ query: body.question, model: body.model, as_of: body.as_of }),
     });
 
     if (!backendRes.ok) {

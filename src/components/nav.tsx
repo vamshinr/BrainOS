@@ -14,11 +14,12 @@ const BASE_NAV: NavItem[] = [
   { href: "/ingest", label: "Ingest", hint: "Capture knowledge" },
   { href: "/failures", label: "Traps", hint: "Loop memory" },
   { href: "/graph", label: "Map", hint: "Entities & links" },
+  { href: "/conflicts", label: "Conflicts", hint: "Resolve disputed facts" },
   { href: "/code", label: "Code", hint: "Codebase map · ownership · ADRs" },
   { href: "/ask", label: "Ask", hint: "Query the brain" },
+  { href: "/onboard", label: "Guide", hint: "Day-one onboarding generator" },
   { href: "/skills", label: "Skills", hint: "Export for agents" },
   { href: "/slack", label: "Slack", hint: "MCP integration" },
-  { href: "/metrics", label: "GPU", hint: "AMD MI300X live stats" },
 ];
 
 const ONBOARD_NAV: NavItem = {
@@ -134,8 +135,8 @@ export function Nav() {
       )}
 
       {/* Desktop sidebar */}
-      <aside className="hidden md:block border-r border-[var(--border)] bg-[var(--muted)]/40 px-5 py-6 sticky top-0 h-screen">
-        <Link href="/" className="block">
+      <aside className="hidden md:flex md:flex-col border-r border-[var(--border)] bg-[var(--muted)]/40 px-5 py-6 sticky top-0 h-screen">
+        <Link href="/" className="block shrink-0">
           <div className="flex items-center gap-2">
             <div className="size-7 rounded-md bg-[var(--accent)] grid place-items-center text-white text-xs font-bold">
               CB
@@ -149,11 +150,11 @@ export function Nav() {
           </div>
         </Link>
 
-        <nav className="mt-8 flex flex-col gap-1">
+        <nav className="mt-8 flex-1 min-h-0 overflow-y-auto flex flex-col gap-1 pb-2">
           <NavList pathname={pathname} items={navItems} />
         </nav>
 
-        <div className="absolute bottom-6 left-5 right-5 space-y-4">
+        <div className="shrink-0 pt-4 border-t border-[var(--border)] space-y-4">
           <ThemeToggle />
           <p className="text-[11px] text-[var(--muted-foreground)] leading-relaxed">
             Atomic facts, reconciled when things change, served to your agents

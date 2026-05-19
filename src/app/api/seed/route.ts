@@ -22,8 +22,7 @@ export async function POST() {
         send({ type: "source:start", index: i, title: seed.title, kind: seed.kind });
 
         try {
-          // Route through the Python backend so extraction runs on the 70B model
-          // on the AMD MI300X and embeddings land in ChromaDB.
+          // Route through the Python backend so extraction runs and embeddings land in ChromaDB.
           const res = await fetch(`${BACKEND_URL}/api/ingest`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },

@@ -67,6 +67,8 @@ export default function AskPage() {
   const [history, setHistory] = useState<Answer[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [model, setModel] = useState("");
+  const [timeTravelEnabled, setTimeTravelEnabled] = useState(false);
+  const [asOfDate, setAsOfDate] = useState("");
 
   async function ask(q: string) {
     setErr(null);
@@ -75,7 +77,11 @@ export default function AskPage() {
       const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q, model: model || undefined }),
+        body: JSON.stringify({
+          question: q,
+          model: model || undefined,
+          as_of: timeTravelEnabled && asOfDate ? asOfDate : undefined,
+        }),
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
@@ -141,6 +147,48 @@ export default function AskPage() {
             hint="affects execute + feedback"
           />
         </div>
+
+        {/* Time-travel toggle */}
+        <div className="flex items-start gap-3 pt-1">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={timeTravelEnabled}
+            onClick={() => setTimeTravelEnabled((v) => !v)}
+            className={`relative mt-0.5 inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${
+              timeTravelEnabled ? "bg-[var(--accent)]" : "bg-[var(--muted)]"
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow ring-0 transition-transform ${
+                timeTravelEnabled ? "translate-x-4" : "translate-x-0"
+              }`}
+            />
+          </button>
+          <div>
+            <div className="text-sm font-medium leading-none">Time travel</div>
+            <div className="text-[11px] text-[var(--muted-foreground)] mt-0.5">
+              Query the brain as it was on a specific date
+            </div>
+            {timeTravelEnabled && (
+              <div className="mt-2 flex items-center gap-2">
+                <label className="text-[11px] text-[var(--muted-foreground)]">As of</label>
+                <input
+                  type="date"
+                  value={asOfDate}
+                  onChange={(e) => setAsOfDate(e.target.value)}
+                  max={new Date().toISOString().slice(0, 10)}
+                  className="rounded border bg-[var(--card)] px-2 py-1 text-sm font-mono text-[var(--foreground)]"
+                />
+                {asOfDate && (
+                  <span className="text-[11px] text-[var(--accent)] font-medium">
+                    Retrieving facts valid on {asOfDate}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
       </form>
 
       <div className="mt-3 flex flex-wrap gap-2">
@@ -179,7 +227,7 @@ export default function AskPage() {
             <div className="mt-4 flex flex-wrap items-center gap-3 text-[11px] text-[var(--muted-foreground)]">
               {h.latency_ms !== null && (
                 <span className="rounded bg-[var(--muted)]/40 px-2 py-0.5 font-mono">
-                  {h.latency_ms} ms · AMD MI300X
+                  {h.latency_ms} ms
                 </span>
               )}
               {h.retrieved_texts.length > 0 && (
@@ -207,6 +255,11 @@ export default function AskPage() {
               {h.answer_revised && (
                 <span className="rounded bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300 px-2 py-0.5">
                   revised by verifier
+                </span>
+              )}
+              {h.retrieval_debug?.temporal_intent?.target_date && (
+                <span className="rounded bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300 px-2 py-0.5">
+                  as of {h.retrieval_debug.temporal_intent.target_date}
                 </span>
               )}
             </div>
