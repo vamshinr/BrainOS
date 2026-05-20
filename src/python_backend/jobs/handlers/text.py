@@ -6,8 +6,6 @@ from storage.brain import _read_brain
 from core.logging import _debug_event, _utc_now_iso
 from agents import ingest_agent, struct_agent
 from jobs.queue import Job, JobQueue
-from config import MAX_EXTRACTION_CHARS as _MAX_EXTRACTION_CHARS
-from agents.extraction import _chunk_text
 from alerts.store import alert_store as decision_alerts
 from jobs import job_queue
 
@@ -35,7 +33,7 @@ def _handler_ingest_text(job: Job, q: JobQueue) -> dict:
         units=extraction.get("units", []),
         entities=extraction.get("entities", []),
         relationships=extraction.get("relationships", []),
-        raw_chunks=_chunk_text(p["content"], max_chars=_MAX_EXTRACTION_CHARS),
+        raw_chunks=[p["content"]],  # TODO: add chunking here if needed
     )
     return {
         "source_id": source_id,
@@ -57,8 +55,6 @@ def _handler_ingest_slack_realtime(job: Job, q: JobQueue) -> dict:
         doc,
         ingest_agent=ingest_agent,
         struct_agent=struct_agent,
-        chunk_text=_chunk_text,
-        max_extraction_chars=_MAX_EXTRACTION_CHARS,
         utc_now_iso=_utc_now_iso,
         debug_event=_debug_event,
         model=p.get("model"),

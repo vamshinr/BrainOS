@@ -48,7 +48,7 @@ class _ClaudeChatCompletions:
 
     def create(self, *, model, messages, max_tokens=None, temperature=None, **kwargs):
         system, converted = _openai_messages_to_anthropic(messages)
-        payload: dict = {"model": model, "messages": converted, "max_tokens": max_tokens or 4096}
+        payload: dict = {"model": model, "messages": converted, "max_tokens": max_tokens or 16000}
         if system:
             payload["system"] = system
         if temperature is not None:

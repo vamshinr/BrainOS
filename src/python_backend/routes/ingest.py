@@ -1,23 +1,16 @@
 """Ingest routes: text, file, image, code, and mock."""
 from __future__ import annotations
 import uuid
-import datetime
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional
-from storage.brain import _read_brain
 from core.logging import _debug_event, _utc_now_iso
 from jobs import job_queue
-from jobs.handlers.file import _extract_file_text
-from jobs.handlers.code import _code_context_for_query
 import os
-import re
 import json
-import base64
-from config import DATA_DIR, MAX_EXTRACTION_CHARS as _MAX_EXTRACTION_CHARS
+from config import DATA_DIR
 from storage.chroma import collection
 from agents import ingest_agent, struct_agent
-from agents.extraction import _chunk_text
 from jobs.handlers.text import _handler_ingest_text
 from jobs.handlers.file import _handler_ingest_file
 from jobs.handlers.image import _handler_ingest_image
@@ -33,96 +26,6 @@ class IngestRequest(BaseModel):
     model: Optional[str] = None
     valid_from: Optional[str] = None
     valid_to: Optional[str] = None  # per-request override for the extraction call
-
-def _infer_unit_kind(text: str) -> str:
-    lowered = text.lower()
-    if any(word in lowered for word in ("owner", "owned by", "owns ", "responsible for", "maintained by", "led by")):
-        return "ownership"
-    if any(word in lowered for word in ("must", "required", "requires", "always", "never", "policy", "approval", "approvals")):
-        return "policy"
-    if any(word in lowered for word in ("step ", "deploy", "run ", "create ", "merge ", "tag ", "restart", "escalate")):
-        return "process"
-    if any(word in lowered for word in ("decided", "decision", "chose", "selected", "standardized on")):
-        return "decision"
-    if any(word in lowered for word in ("means", "defined as", "refers to", " is a ", " is an ")):
-        return "definition"
-    if any(word in lowered for word in ("gotcha", "caveat", "avoid", "fails", "failure", "silently", "unless", "except")):
-        return "gotcha"
-    return "fact"
-
-
-def _infer_department(text: str) -> str:
-    lowered = text.lower()
-    if any(word in lowered for word in ("api", "service", "deploy", "infra", "database", "pr ", "repo", "on-call", "incident")):
-        return "engineering"
-    if any(word in lowered for word in ("security", "soc2", "access", "secret", "vulnerability", "audit")):
-        return "security"
-    if any(word in lowered for word in ("contract", "legal", "nda", "privacy", "compliance", "regulatory")):
-        return "legal"
-    if any(word in lowered for word in ("invoice", "billing", "budget", "payment", "pricing", "revenue")):
-        return "finance"
-    if any(word in lowered for word in ("hiring", "pto", "benefits", "performance", "manager", "employee")):
-        return "hr"
-    if any(word in lowered for word in ("customer", "roadmap", "feature", "release", "ux", "backlog")):
-        return "product"
-    if any(word in lowered for word in ("sales", "pipeline", "quota", "account", "renewal")):
-        return "sales"
-    if any(word in lowered for word in ("campaign", "brand", "launch", "content", "comms")):
-        return "marketing"
-    if any(word in lowered for word in ("vendor", "inventory", "shipping", "warehouse", "procurement")):
-        return "operations"
-    return "general"
-
-
-def _infer_sector(department: str) -> str:
-    return {
-        "engineering": "Engineering",
-        "product": "Product",
-        "legal": "Legal",
-        "finance": "Finance",
-        "hr": "HR",
-        "operations": "Supply Chain",
-    }.get(department, "General")
-
-
-def _extract_candidate_entities(text: str) -> list[dict]:
-    candidates: list[str] = []
-    patterns = [
-        r"\b[A-Z][A-Za-z0-9]*(?:[-_/][A-Za-z0-9]+)+(?:\s+[A-Z][A-Za-z0-9]*(?:[-_/][A-Za-z0-9]+)*)*\b",
-        r"\b[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){1,3}\b",
-        r"\b[A-Za-z][A-Za-z0-9_-]*(?:API|DB|SDK|CLI|SVC|svc)\b",
-        r"\b[A-Za-z][A-Za-z0-9_-]*(?:\s+(?:team|service|api|database|platform|policy|runbook))\b",
-    ]
-    for pattern in patterns:
-        candidates.extend(re.findall(pattern, text, flags=re.IGNORECASE if "team|service" in pattern else 0))
-
-    seen: set[str] = set()
-    entities: list[dict] = []
-    stopwords = {"The", "This", "That", "When", "After", "Before", "All", "Every", "Each"}
-    for raw in candidates:
-        name = re.sub(r"\s+", " ", raw).strip(" .,:;()[]")
-        if not name or name.split()[0] in stopwords:
-            continue
-        key = name.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        lowered = key
-        if any(word in lowered for word in ("team", "group")):
-            kind = "team"
-        elif any(word in lowered for word in ("api", "service", "svc", "db", "database", "platform")):
-            kind = "system"
-        elif any(word in lowered for word in ("policy", "runbook", "process")):
-            kind = "process"
-        elif len(name.split()) >= 2 and all(part[:1].isupper() for part in name.split()[:2]):
-            kind = "person"
-        else:
-            kind = "concept"
-        entities.append({"name": name, "kind": kind, "aliases": []})
-        if len(entities) >= 40:
-            break
-    return entities
-
 
 @router.post("/api/ingest")
 def ingest_text(req: IngestRequest):
@@ -147,7 +50,6 @@ def ingest_text(req: IngestRequest):
     }
 
 
-_MAX_EXTRACTION_CHARS = 12_000  # ~3k tokens; keeps prompt well inside 70B context window
 
 
 @router.post("/api/ingest_file")
@@ -287,7 +189,7 @@ def ingest_mock():
             units=extraction.get("units", []),
             entities=extraction.get("entities", []),
             relationships=extraction.get("relationships", []),
-            raw_chunks=_chunk_text(item.get("content", ""), max_chars=_MAX_EXTRACTION_CHARS),
+            raw_chunks=[item.get("content", "")],  # TODO: add chunking here if needed
         )
         total_units += result["units_stored"]
         total_entities += result["entities_stored"]
