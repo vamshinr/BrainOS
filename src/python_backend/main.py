@@ -46,19 +46,15 @@ app.include_router(slack_router)
 # ── Slack MCP router (events, canvas, slash commands) ─────────────────────────
 from integrations.slack_routes import create_slack_router
 from agents import ingest_agent, struct_agent, exec_agent, feedback_agent
-from agents.extraction import _chunk_text
 from core.logging import _utc_now_iso, _debug_event
 from core.security import _is_sensitive
 from jobs.handlers import _enqueue_slack_realtime_ingest
 
-_MAX_EXTRACTION_CHARS = int(os.getenv("MAX_EXTRACTION_CHARS", "8000"))
 app.include_router(create_slack_router(
     ingest_agent=ingest_agent,
     struct_agent=struct_agent,
     exec_agent=exec_agent,
     feedback_agent=feedback_agent,
-    chunk_text=_chunk_text,
-    max_extraction_chars=_MAX_EXTRACTION_CHARS,
     utc_now_iso=_utc_now_iso,
     debug_event=_debug_event,
     is_sensitive=_is_sensitive,

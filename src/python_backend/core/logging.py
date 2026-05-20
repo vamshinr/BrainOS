@@ -22,11 +22,16 @@ def _debug_value(value) -> str:
 
 
 def _debug_event(stage: str, message: str, **fields):
-    details = " | ".join(
-        f"{key}={_debug_value(value)}" for key, value in fields.items()
+    parts = []
+    # elapsed_ms gets a special ⏱ prefix so it's visually scannable
+    if "elapsed_ms" in fields:
+        parts.append(f"⏱ {fields.pop('elapsed_ms')}ms")
+    parts += [
+        f"{key}={_debug_value(value)}"
+        for key, value in fields.items()
         if value is not None
-    )
-    suffix = f" | {details}" if details else ""
+    ]
+    suffix = f" | {' | '.join(parts)}" if parts else ""
     print(f"[BrainOS][{_utc_now_iso()}][{stage}] {message}{suffix}")
 
 

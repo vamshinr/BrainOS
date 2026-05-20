@@ -68,7 +68,7 @@ def onboarding_state():
         "slackChannels": slack_channels,
         "slackConfigured": slack_configured,
         "completedAt": completed_at,
-        "complete": bool(completed_at) and docs_ready and slack_ready,
+        "complete": bool(completed_at),
     }
 
 

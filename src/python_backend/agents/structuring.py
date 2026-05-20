@@ -2,7 +2,7 @@
 from __future__ import annotations
 import uuid
 import datetime
-import time
+import time as _time_mod
 from clients.router import _resolve_text_override, router
 from storage.brain import _read_brain, _write_brain
 from storage.chroma import collection
@@ -78,7 +78,7 @@ class StructuringAgent:
             f'Return JSON with target_id set to the id of the matching existing unit.'
         )
         client, model = router.get("reconcile")
-        t0 = time.time()
+        t0 = _time_mod.time()
         try:
             resp = client.chat.completions.create(
                 model=model,
@@ -89,7 +89,7 @@ class StructuringAgent:
                 max_tokens=160,
                 temperature=0.0,
             )
-            latency_ms = int((time.time() - t0) * 1000)
+            latency_ms = int((_time_mod.time() - t0) * 1000)
             usage = getattr(resp, "usage", None)
             result = _parse_extraction_json(resp.choices[0].message.content)
             verdict = result.get("verdict", "independent")
@@ -109,7 +109,7 @@ class StructuringAgent:
             if verdict == "conflicts" and target_id:
                 return {"superseded_ids": [], "duplicate": False, "conflicts_with": [target_id]}
         except Exception as e:
-            _log_call("reconcile", model, int((time.time() - t0) * 1000), ok=False, note=str(e)[:80])
+            _log_call("reconcile", model, int((_time_mod.time() - t0) * 1000), ok=False, note=str(e)[:80])
             print(f"[Reconcile] LLM error: {e}")
 
         return {"superseded_ids": [], "duplicate": False, "conflicts_with": []}
@@ -199,6 +199,7 @@ class StructuringAgent:
                 source_id=source_id,
                 pending_units=len(pending),
             )
+            _t_chroma = _time_mod.time()
             collection.upsert(
                 ids=[uid for uid, _ in pending],
                 documents=[_full_text(unit) for _, unit in pending],
@@ -213,6 +214,12 @@ class StructuringAgent:
                     "department": unit.get("department", "general"),
                 } for _, unit in pending],
             )
+            _debug_event(
+                "store.chroma.upsert.done",
+                "ChromaDB unit upsert complete",
+                elapsed_ms=int((_time_mod.time() - _t_chroma) * 1000),
+                units=len(pending),
+            )
 
         # ── Step 3: reconcile each new unit against existing ones ───────────
         superseded_ids: set[str] = set()
@@ -220,6 +227,7 @@ class StructuringAgent:
         # conflict pairs: target_existing_id -> set of new_unit_ids that conflict with it
         conflict_pairs: dict[str, set[str]] = {}
 
+        _t_reconcile = _time_mod.time()
         for uid, unit in pending:
             rec = self._reconcile(unit, uid, source_id)
             if rec["duplicate"]:
@@ -243,6 +251,7 @@ class StructuringAgent:
         _debug_event(
             "store.reconcile.done",
             "Reconciliation complete",
+            elapsed_ms=int((_time_mod.time() - _t_reconcile) * 1000),
             source_id=source_id,
             pending_units=len(pending),
             stored_units=len(stored_units),
@@ -251,7 +260,13 @@ class StructuringAgent:
         )
 
         # ── Step 4: merge into brain.json ───────────────────────────────────
+        _t_brain_read = _time_mod.time()
         brain = _read_brain()
+        _debug_event(
+            "store.brain.read",
+            "brain.json read",
+            elapsed_ms=int((_time_mod.time() - _t_brain_read) * 1000),
+        )
 
         if not isinstance(brain.get("rawChunks"), list):
             brain["rawChunks"] = []
@@ -281,6 +296,7 @@ class StructuringAgent:
                 source_id=source_id,
                 raw_chunks=len(new_raw_chunks),
             )
+            _t_raw = _time_mod.time()
             collection.upsert(
                 ids=[chunk["id"] for chunk in new_raw_chunks],
                 documents=[chunk["text"] for chunk in new_raw_chunks],
@@ -291,6 +307,12 @@ class StructuringAgent:
                     "kind": chunk.get("kind", "doc"),
                     "chunk_index": chunk.get("chunkIndex", 0),
                 } for chunk in new_raw_chunks],
+            )
+            _debug_event(
+                "store.chroma.raw_chunks.done",
+                "Raw chunks upsert complete",
+                elapsed_ms=int((_time_mod.time() - _t_raw) * 1000),
+                raw_chunks=len(new_raw_chunks),
             )
 
         # Entity dedup by canonical key (handles "Intel" / "Intel Corporation" /
@@ -422,8 +444,22 @@ class StructuringAgent:
                 merges=rename_map,
             )
 
+        _t_write = _time_mod.time()
         _write_brain(brain)
+        _debug_event(
+            "store.brain.write",
+            "brain.json written",
+            elapsed_ms=int((_time_mod.time() - _t_write) * 1000),
+            sources=len(brain["sources"]),
+            units=len(brain["units"]),
+        )
+        _t_index = _time_mod.time()
         _build_indexes(brain)
+        _debug_event(
+            "store.index.rebuild",
+            "In-memory indexes rebuilt",
+            elapsed_ms=int((_time_mod.time() - _t_index) * 1000),
+        )
 
         _debug_event(
             "store.done",

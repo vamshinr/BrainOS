@@ -9,17 +9,28 @@ from storage.brain import _read_brain
 from core.logging import _debug_event
 from agents import ingest_agent, struct_agent
 from jobs.queue import Job, JobQueue
-from config import MAX_EXTRACTION_CHARS as _MAX_EXTRACTION_CHARS
 import os, re, uuid, shutil, subprocess, tempfile
-from agents.extraction import _chunk_text
 from core.logging import _utc_now_iso
 
 def _handler_ingest_file(job: Job, q: JobQueue) -> dict:
+    import time as _time
+    t_job = _time.time()
     p = job.payload
     filename = p["filename"]
     data: bytes = p["data"]
+
+    # ── Phase 1: text extraction ──────────────────────────────────────────────
     q.update_progress(job.id, step="extracting text", progress=0.05)
+    t0 = _time.time()
     text = _extract_file_text(filename, data)
+    _debug_event(
+        "ingest.file.extract",
+        "Text extraction complete",
+        elapsed_ms=int((_time.time() - t0) * 1000),
+        filename=filename,
+        bytes=len(data),
+        chars=len(text),
+    )
     if (
         not text.strip()
         or text.startswith("[PDF has no selectable")
@@ -28,25 +39,55 @@ def _handler_ingest_file(job: Job, q: JobQueue) -> dict:
         or text.startswith("[DOCX extraction failed")
     ):
         raise RuntimeError(text if text.startswith("[") else "Could not extract any text from the file.")
-    chunks = _chunk_text(text, max_chars=_MAX_EXTRACTION_CHARS)
-    all_units, all_entities, all_relationships = [], [], []
-    for idx, chunk in enumerate(chunks, start=1):
-        q.update_progress(
-            job.id,
-            step=f"extracting facts (chunk {idx}/{len(chunks)})",
-            progress=0.1 + 0.6 * (idx / max(len(chunks), 1)),
-        )
-        ex = ingest_agent.extract_from_text(p["kind"], p["title"], chunk, model_override=p.get("model"))
-        all_units.extend(ex.get("units", []))
-        all_entities.extend(ex.get("entities", []))
-        all_relationships.extend(ex.get("relationships", []))
+
+    # ── Phase 2: LLM extraction ───────────────────────────────────────────────
+    # TODO: add chunking here if documents regularly exceed model context limits
+    q.update_progress(job.id, step="extracting facts", progress=0.2)
+    _debug_event(
+        "ingest.file.llm.start",
+        "Sending full text to extraction model",
+        chars=len(text),
+        model=p.get("model") or "default",
+    )
+    t0 = _time.time()
+    ex = ingest_agent.extract_from_text(p["kind"], p["title"], text, model_override=p.get("model"))
+    all_units = ex.get("units", [])
+    all_entities = ex.get("entities", [])
+    all_relationships = ex.get("relationships", [])
+    _debug_event(
+        "ingest.file.llm.done",
+        "LLM extraction complete",
+        elapsed_ms=int((_time.time() - t0) * 1000),
+        units=len(all_units),
+        entities=len(all_entities),
+        relationships=len(all_relationships),
+    )
+
+    # ── Phase 3: fallback extraction if LLM returned nothing ─────────────────
     used_fallback = False
     if not (all_units or all_entities or all_relationships):
+        _debug_event(
+            "ingest.file.fallback.start",
+            "LLM returned no results — running heuristic fallback extractor",
+            filename=filename,
+            chars=len(text),
+        )
+        t0 = _time.time()
         fb = _fallback_extract_from_document(p["kind"], p["title"], text)
         all_units = fb.get("units", [])
         all_entities = fb.get("entities", [])
         all_relationships = fb.get("relationships", [])
         used_fallback = True
+        _debug_event(
+            "ingest.file.fallback.done",
+            "Heuristic fallback extraction complete",
+            elapsed_ms=int((_time.time() - t0) * 1000),
+            units=len(all_units),
+            entities=len(all_entities),
+            relationships=len(all_relationships),
+        )
+
+    # ── Phase 4: embed + reconcile + store ────────────────────────────────────
     q.update_progress(job.id, step="reconciling + storing", progress=0.85)
     source_id = str(uuid.uuid4())[:8]
     now = _utc_now_iso()
@@ -54,22 +95,55 @@ def _handler_ingest_file(job: Job, q: JobQueue) -> dict:
         "id": source_id, "kind": p["kind"], "title": p["title"],
         "content": text[:2000], "url": p.get("url"), "capturedAt": now,
         "uploadedFilename": filename, "charCount": len(text),
-        "chunkCount": len(chunks),
         "extractionMode": "fallback" if used_fallback else "model",
         "validFrom": p.get("valid_from") or None,
         "validTo": p.get("valid_to") or None,
     }
+    _debug_event(
+        "ingest.file.store.start",
+        "Starting embed + reconcile + store phase",
+        source_id=source_id,
+        units=len(all_units),
+        entities=len(all_entities),
+        relationships=len(all_relationships),
+    )
+    t0 = _time.time()
     result = struct_agent.embed_and_store(
         source_id=source_id, source=source,
         units=all_units, entities=all_entities,
-        relationships=all_relationships, raw_chunks=chunks,
+        relationships=all_relationships,
+        raw_chunks=[text],  # TODO: split into chunks here if needed
     )
+    _debug_event(
+        "ingest.file.store.done",
+        "Embed + reconcile + store complete",
+        elapsed_ms=int((_time.time() - t0) * 1000),
+        source_id=source_id,
+        units_stored=result.get("units_stored"),
+        chroma_total=result.get("chroma_total"),
+    )
+
+    total_ms = int((_time.time() - t_job) * 1000)
+    _debug_event(
+        "ingest.file.complete",
+        "=== File ingest job finished ===",
+        elapsed_ms=total_ms,
+        filename=filename,
+        chars=len(text),
+        units_extracted=len(all_units),
+        entities_extracted=len(all_entities),
+        relationships_extracted=len(all_relationships),
+        fallback_extraction=used_fallback,
+        units_stored=result.get("units_stored"),
+    )
+
     return {
-        "source_id": source_id, "chunks_processed": len(chunks),
+        "source_id": source_id,
         "units_extracted": len(all_units),
         "entities_extracted": len(all_entities),
         "relationships_extracted": len(all_relationships),
         "fallback_extraction": used_fallback,
+        "total_ms": total_ms,
         **result,
     }
 
@@ -226,7 +300,7 @@ def _fallback_extract_from_document(source_type: str, title: str, text: str) -> 
             elif "uses" in lowered:
                 verb = "uses"
             elif "integrates with" in lowered:
-                verb = "integrates-with"
+                verb = "integrates_with"
         if not (left and right):
             continue
         relationships.append({"from": left[-80:], "relation": verb, "to": right[:80], "confidence": 0.45})

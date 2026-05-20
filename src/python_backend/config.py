@@ -45,4 +45,6 @@ SLACK_POLLER_INTERVAL = float(os.getenv("SLACK_POLLER_INTERVAL_S", "15") or 15)
 ALERT_MIN_CONFIDENCE = float(os.getenv("DECISION_ALERT_MIN_CONFIDENCE", "0.75") or 0.75)
 CEO_ALERT_KINDS      = {"decision", "policy", "ownership"}
 
+# Chunking is currently disabled — full text is sent to the LLM in one call.
+# Restore usage of this constant when re-enabling chunking for large documents.
 MAX_EXTRACTION_CHARS = int(os.getenv("MAX_EXTRACTION_CHARS", "8000"))

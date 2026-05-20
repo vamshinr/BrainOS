@@ -151,15 +151,35 @@ class JobQueue:
                 job.status = "running"
                 job.started_at = _utc_now_iso()
             self._notify("job.started", job)
+            _debug_event(
+                "job.start",
+                f"Job started: {job.kind}",
+                job_id=job.id,
+                title=job.title,
+            )
+            t0 = time.time()
             try:
                 result = job.handler(job, self)
                 job.result = result if isinstance(result, dict) else {"value": result}
                 job.status = "completed"
                 job.progress = 1.0
+                elapsed_ms = int((time.time() - t0) * 1000)
+                _debug_event(
+                    "job.done",
+                    f"Job completed: {job.kind}",
+                    job_id=job.id,
+                    elapsed_ms=elapsed_ms,
+                )
             except Exception as e:
+                elapsed_ms = int((time.time() - t0) * 1000)
                 job.error = str(e)
                 job.status = "failed"
-                print(f"[BrainOS] job {job.id} ({job.kind}) failed: {e}")
+                _debug_event(
+                    "job.failed",
+                    f"Job failed: {job.kind} — {e}",
+                    job_id=job.id,
+                    elapsed_ms=elapsed_ms,
+                )
             finally:
                 job.finished_at = _utc_now_iso()
                 with self._lock:

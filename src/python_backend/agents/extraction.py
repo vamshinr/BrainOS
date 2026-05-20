@@ -6,19 +6,125 @@ import json
 def _parse_extraction_json(raw: str) -> dict:
     """Robustly extract JSON from LLM output that may include markdown fences."""
     raw = raw.strip()
-    # Strip markdown code fences if present
     fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
     if fence:
         raw = fence.group(1).strip()
-    # Find outermost JSON object
     start = raw.find("{")
     end = raw.rfind("}") + 1
     if start != -1 and end > start:
         raw = raw[start:end]
     try:
         return json.loads(raw)
-    except json.JSONDecodeError:
-        return {"entities": [], "units": [], "relationships": []}
+    except json.JSONDecodeError as e:
+        raise ValueError(f"LLM returned unparseable JSON: {e} — raw={raw[:200]!r}") from e
+
+
+_VALID_UNIT_KINDS = {"fact", "process", "decision", "ownership", "definition", "policy", "gotcha"}
+_VALID_DEPARTMENTS = {
+    "engineering", "product", "legal", "finance", "hr",
+    "sales", "marketing", "operations", "security", "customer_success", "general",
+}
+_VALID_TEMPORAL_STATUSES = {"current", "future", "expired", "historical", "unknown"}
+
+# Derived from department — LLM no longer emits sector, we compute it deterministically.
+_DEPT_TO_SECTOR: dict[str, str] = {
+    "engineering": "Engineering",
+    "product": "Product",
+    "legal": "Legal",
+    "finance": "Finance",
+    "hr": "HR",
+    "operations": "Supply Chain",
+    "security": "Engineering",
+    "customer_success": "General",
+    "sales": "General",
+    "marketing": "General",
+    "general": "General",
+}
+
+
+def _validate_extraction(data: dict) -> dict:
+    """
+    Validate and coerce the raw extraction dict into the expected schema.
+    Drops malformed entries rather than letting garbage propagate into the brain.
+    Returns a clean dict with entities/units/relationships guaranteed present.
+    """
+    entities = []
+    for e in data.get("entities") or []:
+        if not isinstance(e, dict):
+            continue
+        name = (e.get("name") or "").strip()
+        if not name:
+            continue
+        entities.append({
+            "name": name,
+            "kind": e.get("kind") or "concept",
+            "aliases": [a for a in (e.get("aliases") or []) if isinstance(a, str) and a.strip()],
+            "description": (e.get("description") or "").strip(),
+            "evidence_quote": (e.get("evidence_quote") or "").strip(),
+        })
+
+    units = []
+    for u in data.get("units") or []:
+        if not isinstance(u, dict):
+            continue
+        statement = (u.get("statement") or "").strip()
+        if not statement:
+            continue
+        kind = u.get("kind") or "fact"
+        if kind not in _VALID_UNIT_KINDS:
+            kind = "fact"
+        dept = (u.get("department") or "general").strip().lower()
+        if dept not in _VALID_DEPARTMENTS:
+            dept = "general"
+        try:
+            conf = float(u["confidence"]) if u.get("confidence") is not None else 0.7
+        except (TypeError, ValueError):
+            conf = 0.7
+        ts = u.get("temporal_status") or "unknown"
+        if ts not in _VALID_TEMPORAL_STATUSES:
+            ts = "unknown"
+        units.append({
+            "kind": kind,
+            "department": dept,
+            "sector": _DEPT_TO_SECTOR.get(dept, "General"),  # derived, not from LLM
+            "subject": (u.get("subject") or "").strip(),
+            "statement": statement,
+            "entities": [e for e in (u.get("entities") or []) if isinstance(e, str) and e.strip()],
+            "evidence_quote": (u.get("evidence_quote") or "").strip(),
+            "confidence": round(max(0.0, min(1.0, conf)), 4),
+            "temporal_status": ts,
+            "valid_from": u.get("valid_from") or "",
+            "valid_to": u.get("valid_to") or "",
+            "effective_date": u.get("effective_date") or "",
+            "observed_at": u.get("observed_at") or "",
+        })
+
+    relationships = []
+    for r in data.get("relationships") or []:
+        if not isinstance(r, dict):
+            continue
+        frm = (r.get("from") or "").strip()
+        to = (r.get("to") or "").strip()
+        relation = (r.get("relation") or "").strip()
+        if not (frm and to and relation):
+            continue
+        try:
+            conf = float(r["confidence"]) if r.get("confidence") is not None else 0.7
+        except (TypeError, ValueError):
+            conf = 0.7
+        ts = r.get("temporal_status") or "unknown"
+        if ts not in _VALID_TEMPORAL_STATUSES:
+            ts = "unknown"
+        relationships.append({
+            "from": frm,
+            "relation": relation,
+            "to": to,
+            "evidence_quote": (r.get("evidence_quote") or "").strip(),
+            "confidence": round(max(0.0, min(1.0, conf)), 4),
+            "temporal_status": ts,
+        })
+
+    return {"entities": entities, "units": units, "relationships": relationships}
 
 
 # ══════════════════════════════════════════════════════════════════════════════

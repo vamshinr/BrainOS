@@ -5,14 +5,13 @@ import { useRouter } from "next/navigation";
 
 type WizardStep = "welcome" | "docs" | "slack" | "done";
 
-type UploadStatus = "uploading" | "processing" | "ready" | "error";
+type UploadStatus = "uploading" | "queued" | "error";
 
 type UploadItem = {
-  id: string;          // local id (filename + timestamp)
+  id: string;
   filename: string;
   size: number;
   status: UploadStatus;
-  jobId?: string;
   error?: string;
   startedAt: number;
 };
@@ -209,9 +208,9 @@ function DocsStep({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const docsCount = state?.docsCount ?? 0;
-  const localUploaded = items.filter((i) => i.status === "ready").length;
-  const totalReady = Math.max(docsCount, localUploaded);
-  const canContinue = totalReady > 0;
+  const localQueued = items.filter((i) => i.status === "queued").length;
+  const totalReady = Math.max(docsCount, localQueued);
+  const canContinue = true; // docs upload is optional
 
   const startUpload = useCallback(async (file: File) => {
     const id = `${file.name}-${Date.now()}`;
@@ -242,12 +241,10 @@ function DocsStep({
         const errBody = await res.text();
         throw new Error(errBody || `HTTP ${res.status}`);
       }
-      const body = await res.json();
+      await res.json(); // discard job_id — processing happens in background
       setItems((prev) =>
         prev.map((it) =>
-          it.id === id
-            ? { ...it, status: "processing", jobId: body.job_id }
-            : it,
+          it.id === id ? { ...it, status: "queued" } : it,
         ),
       );
     } catch (e) {
@@ -259,39 +256,6 @@ function DocsStep({
     }
   }, []);
 
-  // Poll job status for everything currently processing.
-  useEffect(() => {
-    const processing = items.filter((i) => i.status === "processing" && i.jobId);
-    if (processing.length === 0) return;
-    const id = setInterval(async () => {
-      const updates = await Promise.all(
-        processing.map(async (it) => {
-          try {
-            const r = await fetch(`/api/jobs/${it.jobId}`, { cache: "no-store" });
-            if (!r.ok) return null;
-            const j = await r.json();
-            return { id: it.id, status: j?.status };
-          } catch {
-            return null;
-          }
-        }),
-      );
-      setItems((prev) =>
-        prev.map((it) => {
-          const u = updates.find((u) => u && u.id === it.id);
-          if (!u) return it;
-          if (u.status === "succeeded" || u.status === "completed") {
-            return { ...it, status: "ready" };
-          }
-          if (u.status === "failed" || u.status === "error") {
-            return { ...it, status: "error", error: "Processing failed" };
-          }
-          return it;
-        }),
-      );
-    }, 1500);
-    return () => clearInterval(id);
-  }, [items]);
 
   const onPick = useCallback(
     (files: FileList | null) => {
@@ -380,12 +344,12 @@ function DocsStep({
       <div className="mt-10 flex items-center justify-between gap-3">
         <SecondaryButton onClick={onBack}>← Back</SecondaryButton>
         <div className="flex items-center gap-2">
-          {!canContinue && (
+          {totalReady === 0 && (
             <span className="text-xs text-[var(--muted-foreground)]">
-              Add at least one document to continue
+              You can add documents later
             </span>
           )}
-          <PrimaryButton onClick={onNext} disabled={!canContinue}>
+          <PrimaryButton onClick={onNext}>
             Continue →
           </PrimaryButton>
         </div>
@@ -395,7 +359,6 @@ function DocsStep({
 }
 
 function UploadRow({ item }: { item: UploadItem }) {
-  const isWorking = item.status === "uploading" || item.status === "processing";
   return (
     <li className="flex items-center gap-3 rounded-lg border bg-[var(--background)]/40 px-3.5 py-2.5">
       <span className="grid size-7 shrink-0 place-items-center rounded-md bg-[var(--muted)] text-[var(--muted-foreground)]">
@@ -407,23 +370,41 @@ function UploadRow({ item }: { item: UploadItem }) {
           {(item.size / 1024 / 1024).toFixed(2)} MB
           {item.error && <span className="ml-2 text-red-600">· {item.error}</span>}
         </div>
+        {item.status === "queued" && (
+          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-blue-600 dark:text-blue-400">
+            <span className="size-1.5 shrink-0 rounded-full bg-current animate-pulse" />
+            Processing · extracting knowledge, entities &amp; relationships · you can continue to the site
+          </div>
+        )}
       </div>
-      <StatusPill status={item.status} pulse={isWorking} />
+      <StatusPill status={item.status} />
     </li>
   );
 }
 
-function StatusPill({ status, pulse }: { status: UploadStatus; pulse: boolean }) {
-  const map = {
-    uploading: { label: "Uploading…", tone: "bg-[var(--muted)] text-[var(--muted-foreground)]" },
-    processing: { label: "Extracting…", tone: "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300" },
-    ready: { label: "Ready", tone: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300" },
-    error: { label: "Failed", tone: "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300" },
-  }[status];
+function StatusPill({ status }: { status: UploadStatus }) {
+  const map: Record<UploadStatus, { label: string; tone: string; pulse: boolean }> = {
+    uploading: {
+      label: "Uploading…",
+      tone: "bg-[var(--muted)] text-[var(--muted-foreground)]",
+      pulse: true,
+    },
+    queued: {
+      label: "Uploaded ✓",
+      tone: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
+      pulse: false,
+    },
+    error: {
+      label: "Failed",
+      tone: "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300",
+      pulse: false,
+    },
+  };
+  const { label, tone, pulse } = map[status];
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${map.tone}`}>
+    <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${tone}`}>
       {pulse && <span className="size-1.5 rounded-full bg-current opacity-60 animate-pulse" />}
-      {map.label}
+      {label}
     </span>
   );
 }
@@ -570,9 +551,16 @@ function SlackStep({
 
       <div className="mt-10 flex items-center justify-between gap-3">
         <SecondaryButton onClick={onBack}>← Back</SecondaryButton>
-        <PrimaryButton onClick={onNext} disabled={!connected}>
-          Continue →
-        </PrimaryButton>
+        <div className="flex items-center gap-3">
+          {!connected && (
+            <span className="text-xs text-[var(--muted-foreground)]">
+              You can connect Slack later
+            </span>
+          )}
+          <PrimaryButton onClick={onNext}>
+            {connected ? "Continue →" : "Skip for now →"}
+          </PrimaryButton>
+        </div>
       </div>
     </section>
   );

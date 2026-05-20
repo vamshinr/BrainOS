@@ -5,7 +5,7 @@ import time
 from clients.router import _resolve_override, _resolve_text_override
 from core.logging import _debug_event, _log_call
 from agents.prompts import EXTRACTION_SYSTEM
-from agents.extraction import _chunk_text, _merge_extractions, _parse_extraction_json
+from agents.extraction import _parse_extraction_json, _validate_extraction
 
 class IngestionAgent:
     """Reads raw content (text or image) and extracts structured knowledge via the LLM."""
@@ -16,23 +16,12 @@ class IngestionAgent:
         title: str,
         chunk: str,
         model_override: str | None = None,
-        *,
-        retry: bool = False,
     ) -> dict:
-        retry_instructions = ""
-        if retry:
-            retry_instructions = (
-                "\n\nThe previous pass returned no durable knowledge. Re-read carefully and "
-                "extract operational facts, named services, owners, unsafe windows, APIs, "
-                "policies, gotchas, dates, teams, tools, and relationships. Return empty "
-                "arrays only if this chunk truly contains no company knowledge."
-            )
         prompt = (
             f"SOURCE TYPE: {source_type}\n"
             f"TITLE: {title}\n"
             f"---\n{chunk}\n---\n\n"
             "Extract entities, knowledge units, and relationships per the system instructions."
-            f"{retry_instructions}"
         )
         client, model = _resolve_text_override("extraction", model_override)
         t0 = time.time()
@@ -43,7 +32,6 @@ class IngestionAgent:
             title=title,
             model=model,
             chars=len(chunk),
-            retry=retry,
         )
         try:
             response = client.chat.completions.create(
@@ -52,8 +40,10 @@ class IngestionAgent:
                     {"role": "system", "content": EXTRACTION_SYSTEM},
                     {"role": "user", "content": prompt},
                 ],
-                max_tokens=2048,
                 temperature=0.1,
+                # Enforces JSON output on OpenAI and vLLM; silently ignored by Claude
+                # (Claude follows the prompt instruction instead).
+                response_format={"type": "json_object"},
             )
             latency_ms = int((time.time() - t0) * 1000)
             usage = getattr(response, "usage", None)
@@ -61,87 +51,64 @@ class IngestionAgent:
                 "extraction", model, latency_ms,
                 prompt_tokens=getattr(usage, "prompt_tokens", None),
                 completion_tokens=getattr(usage, "completion_tokens", None),
-                note=f"chunk len={len(chunk)}",
+                note=f"chars={len(chunk)}",
             )
-            parsed = _parse_extraction_json(response.choices[0].message.content)
-            parsed.setdefault("entities", [])
-            parsed.setdefault("units", [])
-            parsed.setdefault("relationships", [])
+            raw = _parse_extraction_json(response.choices[0].message.content)
+            result = _validate_extraction(raw)
             _debug_event(
                 "extract.chunk.done",
                 "Extraction model returned structured data",
                 model=model,
                 latency_ms=latency_ms,
-                units=len(parsed.get("units", [])),
-                entities=len(parsed.get("entities", [])),
-                relationships=len(parsed.get("relationships", [])),
-                retry=retry,
+                units=len(result["units"]),
+                entities=len(result["entities"]),
+                relationships=len(result["relationships"]),
             )
-            return parsed
+            return result
         except Exception as e:
-            _log_call("extraction", model, int((time.time() - t0) * 1000), ok=False, note=str(e)[:80])
+            latency_ms = int((time.time() - t0) * 1000)
+            _log_call("extraction", model, latency_ms, ok=False, note=str(e)[:80])
             _debug_event(
                 "extract.chunk.error",
-                "Extraction model failed",
+                "Extraction model failed — raising so job is marked failed",
                 model=model,
-                latency_ms=int((time.time() - t0) * 1000),
-                error=e,
+                latency_ms=latency_ms,
+                error=str(e),
             )
-            return {"entities": [], "units": [], "relationships": []}
+            raise RuntimeError(f"Extraction failed ({model}): {e}") from e
+
+    # ~100K chars ≈ 25K tokens. Beyond this, smaller models may hit context limits.
+    # Claude Sonnet handles 200K tokens; vLLM models vary. Warn, but don't block.
+    # TODO: add chunking here if content regularly exceeds model context limits.
+    _CONTEXT_WARN_CHARS = 100_000
 
     def extract_from_text(self, source_type: str, title: str, content: str, model_override: str | None = None) -> dict:
         _debug_event(
             "extract.text.start",
-            "Preparing text for extraction",
+            "Sending full text to extraction model",
             source_type=source_type,
             title=title,
             chars=len(content),
             model_override=model_override,
         )
-        chunks = _chunk_text(content, max_chars=3500, overlap=300)
-        _debug_event(
-            "extract.text.chunks",
-            "Text chunking complete",
-            source_type=source_type,
-            chunks=len(chunks),
-            chunk_chars=",".join(str(len(chunk)) for chunk in chunks),
-        )
-        results = []
-        for idx, chunk in enumerate(chunks, start=1):
-            result = self._extract_chunk(source_type, title, chunk, model_override=model_override)
-            empty_result = not (
-                result.get("units") or result.get("entities") or result.get("relationships")
+        if len(content) > self._CONTEXT_WARN_CHARS:
+            _debug_event(
+                "extract.text.size_warning",
+                "Content is large — may hit context limits on smaller models",
+                chars=len(content),
+                warn_threshold=self._CONTEXT_WARN_CHARS,
+                estimated_tokens=len(content) // 4,
             )
-            if empty_result and len(chunk.strip()) >= 800:
-                _debug_event(
-                    "extract.chunk.retry",
-                    "Retrying extraction because a substantial chunk returned no knowledge",
-                    source_type=source_type,
-                    title=title,
-                    chunk=idx,
-                    chars=len(chunk),
-                )
-                retry_result = self._extract_chunk(
-                    source_type,
-                    title,
-                    chunk,
-                    model_override=model_override,
-                    retry=True,
-                )
-                if retry_result.get("units") or retry_result.get("entities") or retry_result.get("relationships"):
-                    result = retry_result
-            results.append(result)
-        merged = _merge_extractions(results)
+        result = self._extract_chunk(source_type, title, content, model_override=model_override)
         _debug_event(
             "extract.text.done",
-            "Merged extraction results",
+            "Extraction complete",
             source_type=source_type,
-            chunks=len(chunks),
-            units=len(merged["units"]),
-            entities=len(merged["entities"]),
-            relationships=len(merged["relationships"]),
+            units=len(result["units"]),
+            entities=len(result["entities"]),
+            relationships=len(result["relationships"]),
         )
-        return merged
+        return result
 
     def describe_image(self, image_data: bytes, mime_type: str = "image/png", model_override: str | None = None) -> str:
         """
