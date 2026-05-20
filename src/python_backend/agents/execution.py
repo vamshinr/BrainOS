@@ -7,6 +7,7 @@ from storage.brain import _read_brain
 from storage.chroma import collection
 from core.logging import _debug_event, _log_call
 from core.indexes import _build_indexes, _tokenize_search, _rrf_fuse
+import core.indexes as _idx
 from core.temporal import _detect_temporal_intent, _unit_temporal_score
 from agents.extraction import _parse_extraction_json
 
@@ -97,6 +98,11 @@ class ExecutionAgent:
         chunk_by_id = {c["id"]: c for c in raw_chunks}
         temporal_intent = _detect_temporal_intent(query)
         _build_indexes(brain)
+        _bm25_index = _idx._bm25_index
+        _bm25_unit_ids = _idx._bm25_unit_ids
+        _chunk_bm25_index = _idx._chunk_bm25_index
+        _chunk_ids = _idx._chunk_ids
+        _entity_index = _idx._entity_index
 
         retrieved_ids: list[str] = []
         retrieved_docs: list[str] = []
@@ -353,6 +359,7 @@ class ExecutionAgent:
         # and module summaries when the question touches a code source. Cheap
         # (in-memory scan over the codebase blocks) and runs even when no
         # facts/chunks are retrieved, so a code-only question still gets help.
+        from jobs.handlers.code import _code_context_for_query  # lazy: breaks circular import
         code_context_lines = _code_context_for_query(query, brain)
 
         if retrieved_docs or retrieved_chunks or code_context_lines:
@@ -449,7 +456,7 @@ class ExecutionAgent:
                 {
                     "role": "system",
                     "content": (
-                        "You are the BrainOS execution agent running on an AMD MI300X GPU. "
+                        "You are the BrainOS execution agent. "
                         "Answer questions strictly based on company knowledge provided in context. "
                         "Never invent facts. Never add software-engineering explanations that are not explicitly supported.\n\n"
                         "Format your response as:\n"

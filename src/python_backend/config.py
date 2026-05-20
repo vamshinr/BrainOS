@@ -22,6 +22,8 @@ LLM_API_BASE     = (os.getenv("LLM_API_BASE") or os.getenv("VLLM_API_BASE") or "
 VLM_API_BASE     = (os.getenv("VLM_API_BASE") or "").strip()
 CLAUDE_API_KEY   = os.getenv("CLAUDE_API_KEY", "").strip()
 CLAUDE_MODEL     = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+OPENAI_API_KEY   = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_MODEL     = os.getenv("OPENAI_MODEL", "gpt-4o")
 
 # ── Embedding ──────────────────────────────────────────────────────────────────
 EMBEDDING_API_BASE = os.getenv("EMBEDDING_API_BASE", "")
@@ -42,3 +44,5 @@ SLACK_POLLER_INTERVAL = float(os.getenv("SLACK_POLLER_INTERVAL_S", "15") or 15)
 # ── Alert thresholds ───────────────────────────────────────────────────────────
 ALERT_MIN_CONFIDENCE = float(os.getenv("DECISION_ALERT_MIN_CONFIDENCE", "0.75") or 0.75)
 CEO_ALERT_KINDS      = {"decision", "policy", "ownership"}
+
+MAX_EXTRACTION_CHARS = int(os.getenv("MAX_EXTRACTION_CHARS", "8000"))

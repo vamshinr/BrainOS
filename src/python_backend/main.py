@@ -72,7 +72,8 @@ async def _start_slack_poller() -> None:
     if not SLACK_POLLER_ENABLED:
         print("[BrainOS] slack web poller: disabled via SLACK_POLLER_ENABLED")
         return
-    from integrations.slack_routes import _run_slack_poller, load_slack_config
+    from slack_mcp.web_poller import run_poller as _run_slack_poller
+    from slack_mcp.auth import load_slack_config
     from jobs.handlers import _enqueue_slack_realtime_ingest
     from core.logging import _debug_event
     asyncio.create_task(

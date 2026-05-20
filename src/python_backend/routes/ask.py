@@ -38,6 +38,7 @@ def ask_brainos(req: QueryRequest):
     try:
         exec_result = exec_agent.execute(effective_query, model_override=req.model)
     except Exception as e:
+        _debug_event("ask.execute.error", "ExecutionAgent failed", error=str(e))
         raise HTTPException(status_code=503, detail=f"LLM unavailable: {e}")
 
     verification_context = exec_result.get("verification_context") or exec_result["retrieved_docs"]

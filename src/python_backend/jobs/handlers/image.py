@@ -3,6 +3,11 @@ from __future__ import annotations
 from storage.brain import _read_brain
 from core.logging import _debug_event
 from agents import ingest_agent, struct_agent
+from jobs.queue import Job, JobQueue
+from config import MAX_EXTRACTION_CHARS as _MAX_EXTRACTION_CHARS
+import uuid
+from core.logging import _utc_now_iso
+from jobs.handlers.file import _fallback_extract_from_document
 
 def _handler_ingest_image(job: Job, q: JobQueue) -> dict:
     p = job.payload

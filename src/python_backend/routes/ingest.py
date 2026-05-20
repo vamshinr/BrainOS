@@ -10,6 +10,18 @@ from core.logging import _debug_event, _utc_now_iso
 from jobs import job_queue
 from jobs.handlers.file import _extract_file_text
 from jobs.handlers.code import _code_context_for_query
+import os
+import re
+import json
+import base64
+from config import DATA_DIR, MAX_EXTRACTION_CHARS as _MAX_EXTRACTION_CHARS
+from storage.chroma import collection
+from agents import ingest_agent, struct_agent
+from agents.extraction import _chunk_text
+from jobs.handlers.text import _handler_ingest_text
+from jobs.handlers.file import _handler_ingest_file
+from jobs.handlers.image import _handler_ingest_image
+from jobs.handlers.code import _handler_ingest_code
 
 router = APIRouter()
 

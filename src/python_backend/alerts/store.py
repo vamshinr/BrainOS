@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import os
+import queue as _stdlib_queue
 import threading
 import datetime
 from config import DECISION_ALERTS_JSON, ALERT_MIN_CONFIDENCE, CEO_ALERT_KINDS

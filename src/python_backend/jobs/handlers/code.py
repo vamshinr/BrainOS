@@ -274,6 +274,10 @@ def _link_entities_to_paths(entities: list[dict], file_paths: list[str]) -> dict
 # loading the bodies. Bodies stay Cursor's territory.
 
 import ast as _py_ast
+from jobs.queue import Job, JobQueue
+from config import MAX_EXTRACTION_CHARS as _MAX_EXTRACTION_CHARS
+import collections
+from clients.router import _resolve_override
 
 _MAX_OUTLINE_BYTES = 200_000  # files larger than this are skipped (huge minified, etc.)
 _MAX_SYMBOLS_PER_FILE = 500

@@ -1,6 +1,8 @@
 """Job queue HTTP endpoints."""
 from __future__ import annotations
-from fastapi import APIRouter
+import json
+import queue as _stdlib_queue
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from jobs import job_queue
 

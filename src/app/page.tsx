@@ -103,8 +103,7 @@ export default function HomePage() {
         );
         const docSources = sources.filter(
           (s: { kind?: string }) =>
-            s.kind &&
-            ["doc", "pdf", "file", "text", "code", "image"].includes(s.kind),
+            s.kind && s.kind !== "slack",
         );
         const slackChannels = Array.from(
           new Set(
@@ -134,7 +133,7 @@ export default function HomePage() {
             if (s.kind === "slack") {
               return (s.title || "").startsWith("Slack Realtime:");
             }
-            return s.kind && ["doc", "pdf", "file", "text", "code", "image"].includes(s.kind);
+            return !!s.kind;
           })
           .slice(0, 8)
           .map(
@@ -150,9 +149,7 @@ export default function HomePage() {
                 s.kind === "slack"
                   ? "slack"
                   : s.kind &&
-                      ["doc", "pdf", "file", "text", "code", "image"].includes(
-                        s.kind,
-                      )
+                      s.kind !== "slack"
                     ? "doc"
                     : "other";
               const text =

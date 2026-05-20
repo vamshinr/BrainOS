@@ -5,6 +5,11 @@ import datetime
 from storage.brain import _read_brain
 from core.logging import _debug_event, _utc_now_iso
 from agents import ingest_agent, struct_agent
+from jobs.queue import Job, JobQueue
+from config import MAX_EXTRACTION_CHARS as _MAX_EXTRACTION_CHARS
+from agents.extraction import _chunk_text
+from alerts.store import alert_store as decision_alerts
+from jobs import job_queue
 
 # ── Job handlers ─────────────────────────────────────────────────────────────
 # Each handler takes (job, queue) and returns a result dict. The queue arg is

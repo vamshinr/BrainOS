@@ -1,6 +1,7 @@
 """OpenAI-compatible HTTP client for vLLM (and any OpenAI-compatible endpoint)."""
 from __future__ import annotations
 import os
+import time
 from types import SimpleNamespace
 import httpx
 
@@ -13,14 +14,23 @@ def _to_obj(data):
         return [_to_obj(v) for v in data]
     return data
 
-def _to_obj(data):
-    """Recursively convert JSON dicts to SimpleNamespace so callers can use
-    attribute access (response.choices[0].message.content, etc.)."""
-    if isinstance(data, dict):
-        return SimpleNamespace(**{k: _to_obj(v) for k, v in data.items()})
-    if isinstance(data, list):
-        return [_to_obj(v) for v in data]
-    return data
+
+def _retry_post(http: httpx.Client, path: str, json: dict, max_retries: int = 3) -> httpx.Response:
+    """POST with exponential backoff on 429 rate-limit responses."""
+    delay = 5.0
+    for attempt in range(max_retries):
+        r = http.post(path, json=json)
+        if r.status_code == 429 and attempt < max_retries - 1:
+            retry_after = float(r.headers.get("retry-after", delay))
+            wait = max(retry_after, delay)
+            print(f"[BrainOS] Rate limited (429) — retrying in {wait:.1f}s (attempt {attempt + 1}/{max_retries})")
+            time.sleep(wait)
+            delay *= 2
+            continue
+        r.raise_for_status()
+        return r
+    r.raise_for_status()
+    return r
 
 
 class _ChatCompletions:
@@ -33,8 +43,7 @@ class _ChatCompletions:
             payload["max_tokens"] = max_tokens
         if temperature is not None:
             payload["temperature"] = temperature
-        r = self._http.post("/chat/completions", json=payload)
-        r.raise_for_status()
+        r = _retry_post(self._http, "/chat/completions", payload)
         return _to_obj(r.json())
 
 

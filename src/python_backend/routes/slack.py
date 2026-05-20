@@ -1,5 +1,6 @@
 """Slack integration endpoints: resync, channels, events, canvas, slash commands."""
 from __future__ import annotations
+import httpx
 import os
 import json
 import time

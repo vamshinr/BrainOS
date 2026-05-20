@@ -1,5 +1,6 @@
 """Customer-facing setup wizard endpoints (/api/onboarding/*)."""
 from __future__ import annotations
+import httpx
 import json
 import os
 import time
@@ -12,6 +13,7 @@ from core.logging import _debug_event, _utc_now_iso
 from config import (
     DATA_DIR, ONBOARDING_FILE, SLACK_TOKEN_FILE, SLACK_CHANNEL_MAP_FILE,
 )
+from slack_mcp.auth import load_slack_config
 
 router = APIRouter()
 

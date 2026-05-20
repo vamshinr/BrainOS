@@ -3,7 +3,10 @@ from __future__ import annotations
 from fastapi import APIRouter
 from storage.chroma import collection, EMBEDDING_BACKEND
 from storage.brain import _read_brain
-from clients.router import router as model_router, llm_client, vlm_client, vllm_url, vlm_url, _USING_CLAUDE_FALLBACK, TASKS
+import os
+from config import BRAIN_JSON
+from clients.router import (router as model_router, llm_client, vlm_client,
+    vllm_url, vlm_url, _USING_CLAUDE_FALLBACK, _USING_MANAGED_API, _provider, TASKS, MODEL_NAME, VLM_MODEL_NAME)
 from clients.vllm import VLLMClient
 
 router = APIRouter()
@@ -47,7 +50,7 @@ def _resolve_override(task: str, model_override: str | None) -> tuple[VLLMClient
             return client, model_override
         print(f"[BrainOS] WARNING: requested model '{model_override}' not in index; "
               f"falling back to {task} default.")
-    return router.get(task)
+    return model_router.get(task)
 
 @router.get("/api/models")
 def list_models():
@@ -81,7 +84,8 @@ def health_check():
         available_models = []
     return {
         "status": "ok",
-        "gpu_backend": "AMD MI300X via vLLM",
+        "provider": _provider,
+        "gpu_backend": "vLLM" if _provider == "custom" else _provider,
         "model": MODEL_NAME,
         "vlm_model": VLM_MODEL_NAME,
         "available_models": available_models,

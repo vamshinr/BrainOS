@@ -4,7 +4,10 @@ import os
 from config import (
     LLM_PROVIDER_ENV, LLM_API_BASE, VLM_API_BASE,
     CLAUDE_API_KEY, CLAUDE_MODEL,
+    OPENAI_API_KEY, OPENAI_MODEL,
 )
+import httpx
+from core.logging import _debug_event
 from clients.vllm import VLLMClient
 from clients.claude import ClaudeAPIClient
 
@@ -18,57 +21,77 @@ def _probe_endpoint(url: str, timeout: float = 5.0) -> bool:
 
 
 # ── LLM provider selection ────────────────────────────────────────────────────
-# BrainOS supports two providers, controlled by LLM_PROVIDER:
+# Supported providers (set via LLM_PROVIDER or auto-detected from keys):
 #
-#   LLM_PROVIDER=claude   →  Anthropic Claude API (requires CLAUDE_API_KEY)
-#   LLM_PROVIDER=custom   →  any OpenAI-compatible endpoint, e.g. self-hosted
-#                            vLLM on a GPU. Requires LLM_API_BASE (or its legacy
-#                            alias VLLM_API_BASE) and LLM_MODEL_NAME.
+#   LLM_PROVIDER=claude   →  Anthropic Claude API      (CLAUDE_API_KEY required)
+#   LLM_PROVIDER=openai   →  OpenAI API                (OPENAI_API_KEY required)
+#   LLM_PROVIDER=custom   →  Any OpenAI-compatible endpoint (LLM_API_BASE required)
 #
-# If LLM_PROVIDER is unset, we auto-detect: prefer a reachable custom endpoint,
-# otherwise fall back to Claude if a key is present.
+# Auto-detection priority when LLM_PROVIDER is unset:
+#   Claude key present  →  claude
+#   OpenAI key present  →  openai
+#   LLM_API_BASE reachable → custom
+#   (fallback: custom with warning)
 _provider_env = os.getenv("LLM_PROVIDER", "").strip().lower()
 
-# Custom-endpoint env vars (LLM_* is the canonical name; VLLM_*/VLM_* are kept
-# as backwards-compatible aliases).
-_raw_llm_url = (os.getenv("LLM_API_BASE") or os.getenv("VLLM_API_BASE") or "").strip()
-_raw_vlm_url = (os.getenv("VLM_API_BASE") or "").strip()
+_raw_llm_url  = (os.getenv("LLM_API_BASE") or os.getenv("VLLM_API_BASE") or "").strip()
+_raw_vlm_url  = (os.getenv("VLM_API_BASE") or "").strip()
+_claude_key   = CLAUDE_API_KEY
+_claude_model = CLAUDE_MODEL
+_openai_key   = OPENAI_API_KEY
+_openai_model = OPENAI_MODEL
 
-# Claude env vars.
-_claude_key   = os.getenv("CLAUDE_API_KEY", "").strip()
-_claude_model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-6")
+# True for managed API providers (Claude, OpenAI) — disables per-task endpoint overrides.
+_USING_MANAGED_API = False
+_USING_CLAUDE_FALLBACK = False  # kept for backwards-compat with health route
 
-_USING_CLAUDE_FALLBACK = False
 
 def _choose_provider() -> str:
-    if _provider_env in ("claude", "custom"):
+    if _provider_env in ("claude", "openai", "custom"):
         return _provider_env
-    # Auto-detect: prefer a reachable custom endpoint, else Claude.
-    if _raw_llm_url and _probe_endpoint(_raw_llm_url):
-        return "custom"
+    # Auto-detect: Claude > OpenAI > reachable custom endpoint
     if _claude_key:
         return "claude"
+    if _openai_key:
+        return "openai"
+    if _raw_llm_url and _probe_endpoint(_raw_llm_url):
+        return "custom"
     return "custom"  # last resort — server starts but calls will fail
+
 
 _provider = _choose_provider()
 
 if _provider == "custom":
     if not _raw_llm_url:
         print("[BrainOS] WARNING: LLM_PROVIDER=custom but LLM_API_BASE is empty — ingestion/ask will fail")
-    vllm_url = _raw_llm_url or "http://localhost:8000/v1"
-    vlm_url  = _raw_vlm_url or vllm_url
+    vllm_url   = _raw_llm_url or "http://localhost:8000/v1"
+    vlm_url    = _raw_vlm_url or vllm_url
     llm_client = VLLMClient(base_url=vllm_url)
     vlm_client = VLLMClient(base_url=vlm_url)
     print(f"[BrainOS] Provider: custom endpoint ({vllm_url})")
+
 elif _provider == "claude":
     if not _claude_key:
         print("[BrainOS] WARNING: LLM_PROVIDER=claude but CLAUDE_API_KEY is empty — ingestion/ask will fail")
+    _USING_MANAGED_API = True
     _USING_CLAUDE_FALLBACK = True
-    vllm_url = "https://api.anthropic.com/v1"
-    vlm_url  = vllm_url
+    vllm_url   = "https://api.anthropic.com/v1"
+    vlm_url    = vllm_url
     llm_client = ClaudeAPIClient(api_key=_claude_key or "missing", model=_claude_model)
     vlm_client = ClaudeAPIClient(api_key=_claude_key or "missing", model=_claude_model)
     print(f"[BrainOS] Provider: Claude API ({_claude_model})")
+
+elif _provider == "openai":
+    if not _openai_key:
+        print("[BrainOS] WARNING: LLM_PROVIDER=openai but OPENAI_API_KEY is empty — ingestion/ask will fail")
+    _USING_MANAGED_API = True
+    _USING_CLAUDE_FALLBACK = True  # same behaviour: no per-task endpoint overrides
+    vllm_url   = "https://api.openai.com/v1"
+    vlm_url    = vllm_url
+    # VLLMClient auto-reads OPENAI_API_KEY and adds Authorization: Bearer header
+    llm_client = VLLMClient(base_url=vllm_url)
+    vlm_client = VLLMClient(base_url=vlm_url)
+    print(f"[BrainOS] Provider: OpenAI API ({_openai_model})")
 
 
 def _resolve_model(client, env_name: str, env_value: str) -> str:
@@ -102,18 +125,40 @@ def _resolve_model(client, env_name: str, env_value: str) -> str:
     return auto
 
 
-# Defaults are provider-aware: with provider=claude, MODEL_NAME defaults to
-# CLAUDE_MODEL so users only have to set one env var. With provider=custom,
-# MODEL_NAME must match a model served at LLM_API_BASE.
-if _USING_CLAUDE_FALLBACK:
-    _model_env = os.getenv("MODEL_NAME", _claude_model)
+# Model name defaults are provider-aware so users only need one env var.
+if _provider == "claude":
+    _model_env     = os.getenv("MODEL_NAME", _claude_model)
     _vlm_model_env = os.getenv("VLM_MODEL_NAME", _claude_model)
+elif _provider == "openai":
+    _model_env     = os.getenv("MODEL_NAME", _openai_model)
+    _vlm_model_env = os.getenv("VLM_MODEL_NAME", _openai_model)
 else:
-    _model_env = os.getenv("MODEL_NAME", "llava-hf/llava-v1.6-mistral-7b-hf")
+    _model_env     = os.getenv("MODEL_NAME", "llava-hf/llava-v1.6-mistral-7b-hf")
     _vlm_model_env = os.getenv("VLM_MODEL_NAME", "llava-hf/llava-v1.6-mistral-7b-hf")
 
-MODEL_NAME = _resolve_model(llm_client, "MODEL_NAME", _model_env)
-VLM_MODEL_NAME = _resolve_model(vlm_client, "VLM_MODEL_NAME", _vlm_model_env)
+# For managed API providers (Claude, OpenAI) we trust the configured model name
+# and skip the endpoint probe — _resolve_model queries /models which would
+# return unrelated models (e.g. embedding models) and auto-select the wrong one.
+_OPENAI_KNOWN_MODELS = {
+    "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4",
+    "gpt-3.5-turbo", "o1", "o1-mini", "o3", "o3-mini",
+}
+_CLAUDE_KNOWN_MODELS_PREFIX = ("claude-",)
+
+if _USING_MANAGED_API:
+    MODEL_NAME     = _model_env
+    VLM_MODEL_NAME = _vlm_model_env
+    # Warn on obviously wrong model names for the selected provider
+    if _provider == "openai" and MODEL_NAME not in _OPENAI_KNOWN_MODELS:
+        print(f"[BrainOS] WARNING: OPENAI_MODEL='{MODEL_NAME}' is not a recognised OpenAI model ID.")
+        print(f"[BrainOS]          Valid options: {sorted(_OPENAI_KNOWN_MODELS)}")
+        print(f"[BrainOS]          Set OPENAI_MODEL=gpt-4o-mini in .env and restart.")
+    elif _provider == "claude" and not MODEL_NAME.startswith(_CLAUDE_KNOWN_MODELS_PREFIX):
+        print(f"[BrainOS] WARNING: CLAUDE_MODEL='{MODEL_NAME}' does not look like a Claude model ID (expected 'claude-...').")
+    print(f"[BrainOS] MODEL_NAME={MODEL_NAME} (managed API — skipping model probe)")
+else:
+    MODEL_NAME     = _resolve_model(llm_client, "MODEL_NAME", _model_env)
+    VLM_MODEL_NAME = _resolve_model(vlm_client, "VLM_MODEL_NAME", _vlm_model_env)
 
 
 # ── Per-task model routing ────────────────────────────────────────────────────
@@ -150,8 +195,8 @@ class ModelRouter:
         # VLM has historic env var names
         if task == "vlm":
             return vlm_client, VLM_MODEL_NAME
-        # In Claude fallback mode, ignore per-task API_BASE overrides
-        if _USING_CLAUDE_FALLBACK:
+        # For managed API providers (Claude, OpenAI), ignore per-task API_BASE overrides
+        if _USING_MANAGED_API:
             return llm_client, MODEL_NAME
         api_base = os.getenv(f"{tu}_API_BASE", "").strip() or vllm_url
         model = os.getenv(f"{tu}_MODEL", "").strip() or MODEL_NAME

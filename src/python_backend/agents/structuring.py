@@ -3,12 +3,13 @@ from __future__ import annotations
 import uuid
 import datetime
 import time
-from clients.router import _resolve_text_override
+from clients.router import _resolve_text_override, router
 from storage.brain import _read_brain, _write_brain
 from storage.chroma import collection
 from core.logging import _debug_event, _log_call, _utc_now_iso
 from core.indexes import _build_indexes
-from core.entities import _consolidate_entities, _apply_entity_renames
+from core.entities import (_consolidate_entities, _apply_entity_renames,
+    _build_entity_resolver, _canonical_entity_key, _entity_canonical_keys)
 from core.temporal import _temporal_fields, _infer_temporal_status
 from agents.prompts import RECONCILE_SYSTEM
 from agents.extraction import _parse_extraction_json
@@ -369,6 +370,13 @@ class StructuringAgent:
         brain["units"] = stored_units + brain["units"]
         brain["sources"].insert(0, source)
 
+        # ── Ownership conflict scan (deterministic, no LLM) ────────────────
+        # The LLM reconciler misses conflicts when two ownership units have
+        # different *subjects* (people/teams) but the same *object* (resource).
+        # E.g. "Alice owns billing" vs "Bob owns billing" → both marked current,
+        # neither supersedes the other → conflict that must be flagged here.
+        _detect_ownership_conflicts(brain["units"])
+
         # ── Step 5: merge relationships into brain graph ───────────────────
         if not isinstance(brain.get("relationships"), list):
             brain["relationships"] = []
@@ -449,3 +457,59 @@ class StructuringAgent:
         }
 
 
+
+
+def _detect_ownership_conflicts(units: list) -> None:
+    """
+    Deterministic scan: find ownership units where different subjects claim
+    the same resource. Marks both as disputed without an LLM call.
+
+    Works by extracting the 'owned resource' from each ownership statement
+    using simple heuristics (words after owns/manages/leads/is responsible for),
+    then grouping by resource. Any group with 2+ different active owners is a conflict.
+    """
+    import re
+
+    OWNER_VERBS = re.compile(
+        r"\b(owns?|manages?|leads?|is responsible for|is the owner of|is head of)\b",
+        re.IGNORECASE,
+    )
+
+    def _extract_resource(statement: str) -> str:
+        """Return the lowercased resource phrase after the ownership verb."""
+        m = OWNER_VERBS.search(statement)
+        if not m:
+            return ""
+        after = statement[m.end():].strip(" .,;:")
+        # Trim to first clause boundary
+        after = re.split(r"\band\b|\bfor\b|\bwho\b|\.|,", after)[0].strip()
+        return after.lower()
+
+    active_ownership = [
+        u for u in units
+        if u.get("kind") == "ownership"
+        and not u.get("stale")
+        and not u.get("supersededBy")
+    ]
+
+    # Group by extracted resource
+    by_resource: dict[str, list[dict]] = {}
+    for u in active_ownership:
+        resource = _extract_resource(u.get("statement", ""))
+        if len(resource) < 3:
+            continue
+        by_resource.setdefault(resource, []).append(u)
+
+    # Any resource with 2+ different subjects is a conflict
+    for resource, owners in by_resource.items():
+        subjects = {u.get("subject", "").lower() for u in owners}
+        if len(subjects) < 2:
+            continue
+        # Mark all as disputed with cross-references
+        ids = [u["id"] for u in owners]
+        for u in owners:
+            if not u.get("disputed"):
+                u["disputed"] = True
+                existing = set(u.get("conflictsWith") or [])
+                existing.update(uid for uid in ids if uid != u["id"])
+                u["conflictsWith"] = list(existing)

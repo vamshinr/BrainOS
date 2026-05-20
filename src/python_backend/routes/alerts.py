@@ -1,30 +1,30 @@
 """Decision alert endpoints (list, SSE stream, ack, dismiss)."""
 from __future__ import annotations
-from fastapi import APIRouter
+import json
+import queue as _stdlib_queue
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from alerts.store import alert_store
+from config import ALERT_MIN_CONFIDENCE
 
 router = APIRouter()
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CEO decision alert endpoints
-# ══════════════════════════════════════════════════════════════════════════════
 
 @router.get("/api/decision-alerts")
 def list_decision_alerts(include_closed: bool = False):
     return {
-        "alerts": decision_alerts.list(include_closed=include_closed),
-        "min_confidence": _decision_alert_min_confidence(),
+        "alerts": alert_store.list(include_closed=include_closed),
+        "min_confidence": ALERT_MIN_CONFIDENCE,
     }
 
 
 @router.get("/api/decision-alerts/stream")
 def stream_decision_alerts():
-    listener = decision_alerts.listen()
+    listener = alert_store.listen()
 
     def gen():
         try:
-            yield f"data: {json.dumps({'event': 'snapshot', 'alerts': decision_alerts.list()})}\n\n"
+            yield f"data: {json.dumps({'event': 'snapshot', 'alerts': alert_store.list()})}\n\n"
             while True:
                 try:
                     msg = listener.get(timeout=15)
@@ -32,7 +32,7 @@ def stream_decision_alerts():
                 except _stdlib_queue.Empty:
                     yield ": keepalive\n\n"
         finally:
-            decision_alerts.unlisten(listener)
+            alert_store.unlisten(listener)
 
     return StreamingResponse(
         gen(),
@@ -47,7 +47,7 @@ def stream_decision_alerts():
 
 @router.post("/api/decision-alerts/{alert_id}/ack")
 def acknowledge_decision_alert(alert_id: str):
-    alert = decision_alerts.update_status(alert_id, "acknowledged")
+    alert = alert_store.update_status(alert_id, "acknowledged")
     if not alert:
         raise HTTPException(status_code=404, detail="decision alert not found")
     return {"ok": True, "alert": alert}
@@ -55,7 +55,7 @@ def acknowledge_decision_alert(alert_id: str):
 
 @router.post("/api/decision-alerts/{alert_id}/dismiss")
 def dismiss_decision_alert(alert_id: str):
-    alert = decision_alerts.update_status(alert_id, "dismissed")
+    alert = alert_store.update_status(alert_id, "dismissed")
     if not alert:
         raise HTTPException(status_code=404, detail="decision alert not found")
     return {"ok": True, "alert": alert}

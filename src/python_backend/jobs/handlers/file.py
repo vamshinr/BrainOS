@@ -8,6 +8,11 @@ from pypdf import PdfReader
 from storage.brain import _read_brain
 from core.logging import _debug_event
 from agents import ingest_agent, struct_agent
+from jobs.queue import Job, JobQueue
+from config import MAX_EXTRACTION_CHARS as _MAX_EXTRACTION_CHARS
+import os, re, uuid, shutil, subprocess, tempfile
+from agents.extraction import _chunk_text
+from core.logging import _utc_now_iso
 
 def _handler_ingest_file(job: Job, q: JobQueue) -> dict:
     p = job.payload

@@ -3,6 +3,8 @@ from __future__ import annotations
 import datetime
 import re
 
+_TEMPORAL_STATUSES = {"current", "future", "historical", "expired", "unknown"}
+
 def _parse_date(value: str | None) -> datetime.date | None:
     if not value:
         return None
