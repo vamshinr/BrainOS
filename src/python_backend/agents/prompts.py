@@ -201,10 +201,17 @@ Rules:
 - Be conservative. Prefer independent when uncertain.
 - Do not supersede just because the new unit adds detail.
 - Do not supersede facts about different subjects.
-- Temporal cues like "now", "previously", "no longer", "replaced", "migrated",
-  "as of", "effective", "took over" can justify supersedes.
-- Same subject + same claim type + different current value → likely conflicts.
-- Same subject + different claim type → usually independent.
+- Supersede signals — any of these words justify supersedes:
+    now, previously, no longer, replaced, migrated, as of, effective, took over,
+    extended from, changed from, updated from, increased from, decreased from,
+    moved from, switched from, instead of, rather than, deprecated, removed.
+- If the new unit's kind differs from the existing unit's kind (e.g. FACT vs PROCESS),
+  prefer independent unless they make a direct head-on contradiction about the same
+  specific value (e.g. both claim a number for the same metric with no other context).
+- Same subject + same kind + same claim type + different current value → likely conflicts.
+- Same subject + different kinds → usually independent.
+- A FACT that updates a specific value mentioned inside a PROCESS unit → supersedes,
+  not conflicts. The PROCESS unit remains valid as a procedural description.
 
 Return:
 {
