@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { useRouter } from "next/navigation";
 import { ModelPicker } from "@/components/model-picker";
 
 const KINDS = [
@@ -17,21 +16,15 @@ const KINDS = [
 
 type KindValue = (typeof KINDS)[number]["value"];
 
-type Result = {
-  sourceId: string;
-  addedUnits: number;
-  addedEntities: number;
-  addedRelationships?: number;
-  supersededUnits?: number;
-  charsExtracted?: number;
-  vlmDescriptionChars?: number;
-  totals: { sources: number; entities: number; units: number; relationships?: number };
+type Queued = {
+  jobId: string;
+  title: string;
+  queuePosition: number;
 };
 
-type Tab = "text" | "file" | "image";
+type Tab = "text" | "file" | "image" | "code";
 
 export default function IngestPage() {
-  const router = useRouter();
   const [tab, setTab] = useState<Tab>("text");
 
   // Text form state
@@ -55,14 +48,24 @@ export default function IngestPage() {
   const [imgPreview, setImgPreview] = useState<string | null>(null);
   const imgInputRef = useRef<HTMLInputElement>(null);
 
+  // Code form state — a zip of a repo OR a single code/doc file
+  const [codeTitle, setCodeTitle] = useState("");
+  const [codeUrl, setCodeUrl] = useState("");
+  const [codeFile, setCodeFile] = useState<File | null>(null);
+  const codeInputRef = useRef<HTMLInputElement>(null);
+
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [result, setResult] = useState<Result | null>(null);
+  const [queued, setQueued] = useState<Queued | null>(null);
 
   // Optional per-request model overrides. Empty string = "Auto".
   const [textModel, setTextModel] = useState("");        // text + file extraction
   const [vlmModel, setVlmModel] = useState("");          // image → description
   const [imgTextModel, setImgTextModel] = useState("");  // post-VLM extraction
+
+  // Shared validity window — applies to all three ingest tabs
+  const [validFrom, setValidFrom] = useState("");
+  const [validTo, setValidTo] = useState("");
 
   function onImgChange(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0] ?? null;
@@ -76,11 +79,23 @@ export default function IngestPage() {
     }
   }
 
+  // Read {job_id, title, queue_position} from the enqueue response and turn
+  // it into our Queued shape. The actual processing happens asynchronously —
+  // the QueueDock at the bottom-right shows live progress.
+  function readQueued(j: { job_id?: string; title?: string; queue_position?: number; error?: string }): Queued {
+    if (!j.job_id) throw new Error(j.error ?? "Enqueue failed");
+    return {
+      jobId: j.job_id,
+      title: j.title ?? "Untitled",
+      queuePosition: j.queue_position ?? 0,
+    };
+  }
+
   async function submitFile(e: React.FormEvent) {
     e.preventDefault();
     if (!uploadFile) return;
     setErr(null);
-    setResult(null);
+    setQueued(null);
     setLoading(true);
     try {
       const fd = new FormData();
@@ -93,12 +108,11 @@ export default function IngestPage() {
       const res = await fetch("/api/ingest-file", { method: "POST", body: fd });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
-      setResult(j);
+      setQueued(readQueued(j));
       setFileTitle("");
       setUploadFile(null);
       setFileUrl("");
       if (fileInputRef.current) fileInputRef.current.value = "";
-      router.refresh();
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));
     } finally {
@@ -109,7 +123,7 @@ export default function IngestPage() {
   async function submitText(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
-    setResult(null);
+    setQueued(null);
     setLoading(true);
     try {
       const res = await fetch("/api/ingest", {
@@ -120,15 +134,16 @@ export default function IngestPage() {
           title: title || undefined,
           url: url || undefined,
           model: textModel || undefined,
+          valid_from: validFrom || undefined,
+          valid_to: validTo || undefined,
         }),
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
-      setResult(j);
+      setQueued(readQueued(j));
       setTitle("");
       setContent("");
       setUrl("");
-      router.refresh();
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));
     } finally {
@@ -140,7 +155,7 @@ export default function IngestPage() {
     e.preventDefault();
     if (!imgFile) return;
     setErr(null);
-    setResult(null);
+    setQueued(null);
     setLoading(true);
     try {
       const fd = new FormData();
@@ -154,13 +169,40 @@ export default function IngestPage() {
       const res = await fetch("/api/ingest-image", { method: "POST", body: fd });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
-      setResult(j);
+      setQueued(readQueued(j));
       setImgTitle("");
       setImgFile(null);
       setImgPreview(null);
       setImgUrl("");
       if (imgInputRef.current) imgInputRef.current.value = "";
-      router.refresh();
+    } catch (e) {
+      setErr(String(e instanceof Error ? e.message : e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitCode(e: React.FormEvent) {
+    e.preventDefault();
+    if (!codeFile) return;
+    setErr(null);
+    setQueued(null);
+    setLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", codeFile, codeFile.name);
+      if (codeTitle) fd.append("title", codeTitle);
+      if (codeUrl) fd.append("url", codeUrl);
+      if (textModel) fd.append("model", textModel);
+
+      const res = await fetch("/api/ingest-code", { method: "POST", body: fd });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
+      setQueued(readQueued(j));
+      setCodeTitle("");
+      setCodeFile(null);
+      setCodeUrl("");
+      if (codeInputRef.current) codeInputRef.current.value = "";
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));
     } finally {
@@ -169,7 +211,7 @@ export default function IngestPage() {
   }
 
   return (
-    <div className="px-10 py-10 max-w-3xl">
+    <div className="px-4 sm:px-6 md:px-10 py-6 md:py-10 max-w-3xl">
       <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
         Ingest
       </div>
@@ -188,10 +230,11 @@ export default function IngestPage() {
           { id: "text", label: "Text / Paste" },
           { id: "file", label: "File Upload" },
           { id: "image", label: "Image / VLM" },
+          { id: "code", label: "Code / Repo" },
         ] as { id: Tab; label: string }[]).map((t) => (
           <button
             key={t.id}
-            onClick={() => { setTab(t.id); setErr(null); setResult(null); }}
+            onClick={() => { setTab(t.id); setErr(null); setQueued(null); }}
             className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${
               tab === t.id
                 ? "bg-[var(--foreground)] text-[var(--background)]"
@@ -206,7 +249,7 @@ export default function IngestPage() {
       {/* ── Text form ── */}
       {tab === "text" && (
         <form onSubmit={submitText} className="mt-8 space-y-4">
-          <div className="grid grid-cols-[160px_1fr] gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">
             <Field label="Source type">
               <select
                 value={kind}
@@ -256,6 +299,46 @@ export default function IngestPage() {
             hint="overrides extraction agent"
           />
 
+
+          <div className="rounded-md border border-dashed border-[var(--border)] bg-[var(--muted)]/20 px-4 py-3 space-y-3">
+            <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
+              Validity window <span className="normal-case font-normal">(optional)</span>
+            </div>
+            <div className="flex flex-wrap gap-4 items-center">
+              <label className="flex items-center gap-2 text-sm">
+                <span className="text-[var(--muted-foreground)] w-16">Valid from</span>
+                <input
+                  type="date"
+                  value={validFrom}
+                  onChange={(e) => setValidFrom(e.target.value)}
+                  className="rounded border bg-[var(--card)] px-2 py-1 text-sm font-mono text-[var(--foreground)]"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <span className="text-[var(--muted-foreground)] w-16">Valid to</span>
+                <input
+                  type="date"
+                  value={validTo}
+                  onChange={(e) => setValidTo(e.target.value)}
+                  min={validFrom || undefined}
+                  className="rounded border bg-[var(--card)] px-2 py-1 text-sm font-mono text-[var(--foreground)]"
+                />
+              </label>
+              {(validFrom || validTo) && (
+                <button
+                  type="button"
+                  onClick={() => { setValidFrom(""); setValidTo(""); }}
+                  className="text-[11px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] underline"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <p className="text-[11px] text-[var(--muted-foreground)]">
+              Sets when this knowledge is true. Retrieval boosts current facts and deprioritises expired ones.
+            </p>
+          </div>
+
           <SubmitRow loading={loading} disabled={!content} label="Extract knowledge" />
         </form>
       )}
@@ -265,10 +348,10 @@ export default function IngestPage() {
         <form onSubmit={submitFile} className="mt-8 space-y-4">
           <div className="rounded-md border border-zinc-200 bg-zinc-50 dark:bg-zinc-900/30 dark:border-zinc-700 px-4 py-3 text-sm text-zinc-700 dark:text-zinc-300">
             Upload a <strong>PDF</strong>, <strong>Word doc</strong>, <strong>.txt</strong>, <strong>.md</strong>, or <strong>.csv</strong> file.
-            The 70B model on the AMD MI300X extracts knowledge units and reconciles them against what the brain already knows.
+            The model extracts knowledge units and reconciles them against what the brain already knows.
           </div>
 
-          <div className="grid grid-cols-[160px_1fr] gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">
             <Field label="Source type">
               <select
                 value={fileKind}
@@ -334,10 +417,10 @@ export default function IngestPage() {
           <div className="rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 px-4 py-3 text-sm text-blue-800 dark:text-blue-300">
             <span className="font-medium">VLM pipeline</span> — Upload a screenshot, architecture diagram,
             whiteboard photo, or slide. The vision model describes it, then the 70B model extracts
-            knowledge units. Both run on the AMD MI300X.
+            knowledge units.
           </div>
 
-          <div className="grid grid-cols-[160px_1fr] gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">
             <Field label="Source type">
               <select
                 value={imgKind}
@@ -411,42 +494,83 @@ export default function IngestPage() {
         </form>
       )}
 
+      {/* ── Code form ── */}
+      {tab === "code" && (
+        <form onSubmit={submitCode} className="mt-8 space-y-4">
+          <div className="rounded-md border border-purple-200 bg-purple-50 dark:bg-purple-950/20 dark:border-purple-800 px-4 py-3 text-sm text-purple-800 dark:text-purple-300">
+            <span className="font-medium">Code map mode</span> — drop a{" "}
+            <strong>.zip of your repo</strong> or a single code/doc file. BrainOS
+            builds a file-tree map, extracts rationale from <strong>READMEs,
+            ADRs, RFCs, CONTRIBUTING</strong>, parses <strong>CODEOWNERS</strong>{" "}
+            into ownership facts, and links existing entities to file paths.
+            <br />
+            <span className="opacity-70">We do not embed code bodies — that&apos;s
+            Cursor&apos;s job. We capture <em>why</em> your code is the way it is.</span>
+          </div>
+
+          <Field label="Title (optional)">
+            <input
+              value={codeTitle}
+              onChange={(e) => setCodeTitle(e.target.value)}
+              placeholder="e.g. brainos-main · 2026-05"
+              className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm"
+            />
+          </Field>
+
+          <Field label="Source URL (optional)">
+            <input
+              value={codeUrl}
+              onChange={(e) => setCodeUrl(e.target.value)}
+              placeholder="https://github.com/org/repo"
+              className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm"
+            />
+          </Field>
+
+          <Field label="File (.zip of a repo, or a single code/doc file)">
+            <input
+              ref={codeInputRef}
+              type="file"
+              accept=".zip,.py,.ts,.tsx,.js,.jsx,.go,.rs,.java,.kt,.swift,.rb,.php,.cs,.cpp,.c,.h,.scala,.clj,.ex,.exs,.ml,.lua,.sh,.html,.css,.md,.mdx,.rst,.adoc,.txt,.yaml,.yml,.toml,.json,.sql,.graphql,application/zip"
+              onChange={(e) => setCodeFile(e.target.files?.[0] ?? null)}
+              required
+              className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm file:mr-3 file:rounded file:border-0 file:bg-[var(--foreground)] file:text-[var(--background)] file:px-3 file:py-1 file:text-xs file:font-medium"
+            />
+          </Field>
+
+          {codeFile && (
+            <div className="text-[11px] text-[var(--muted-foreground)]">
+              {codeFile.name} · {(codeFile.size / 1024).toFixed(1)} KB
+              {codeFile.name.toLowerCase().endsWith(".zip") && " · zip → repo walk"}
+            </div>
+          )}
+
+          <ModelPicker
+            value={textModel}
+            onChange={setTextModel}
+            mode="text"
+            label="Rationale extraction model (optional)"
+            hint="used on READMEs, ADRs, RFCs"
+          />
+
+          <SubmitRow loading={loading} disabled={!codeFile} label="Build code map" />
+        </form>
+      )}
+
       {err && (
         <div className="mt-6 rounded-md border border-red-300 bg-red-50 dark:bg-red-950/30 dark:border-red-800 px-4 py-3 text-sm text-red-700 dark:text-red-300">
           {err}
         </div>
       )}
 
-      {result && (
+      {queued && (
         <div className="mt-6 rounded-md border border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800 px-4 py-3 text-sm">
           <div className="font-medium">
-            Extracted {result.addedUnits} knowledge units
-            {result.addedEntities > 0 && `, ${result.addedEntities} entities`}
-            {(result.addedRelationships ?? 0) > 0 && (
-              <span className="text-emerald-700 dark:text-emerald-400">
-                , {result.addedRelationships} graph edges
-              </span>
-            )}.
-            {(result.supersededUnits ?? 0) > 0 && (
-              <span className="ml-1 text-amber-700 dark:text-amber-400">
-                · {result.supersededUnits} superseded.
-              </span>
-            )}
-            {result.charsExtracted
-              ? ` ${result.charsExtracted.toLocaleString()} chars from file.`
-              : ""}
-            {result.vlmDescriptionChars
-              ? ` VLM → ${result.vlmDescriptionChars} chars description.`
-              : ""}
+            Queued: <span className="font-normal">{queued.title}</span>
           </div>
-          <div className="text-xs text-[var(--muted-foreground)] mt-1.5 flex items-center gap-3">
-            <span>
-              Brain: {result.totals.units} units · {result.totals.entities} entities
-              {(result.totals.relationships ?? 0) > 0 && ` · ${result.totals.relationships} relationships`}
-              {" "}from {result.totals.sources} sources
-            </span>
-            <a className="underline" href="/graph">View graph →</a>
-            <a className="underline" href="/">Dashboard →</a>
+          <div className="text-xs text-[var(--muted-foreground)] mt-1.5">
+            {queued.queuePosition <= 1
+              ? "Starting now — watch the dock in the bottom-right for live progress."
+              : `Position #${queued.queuePosition} in the queue. The dock in the bottom-right will update when it starts.`}
           </div>
         </div>
       )}
@@ -481,11 +605,11 @@ function SubmitRow({
         disabled={loading || disabled}
         className="rounded-md bg-[var(--foreground)] text-[var(--background)] px-4 py-2 text-sm font-medium disabled:opacity-50"
       >
-        {loading ? "Processing on AMD MI300X…" : label}
+        {loading ? "Queuing…" : label}
       </button>
       {loading && (
         <span className="text-xs text-[var(--muted-foreground)]">
-          Calling 70B model, embedding into ChromaDB…
+          Enqueueing job — progress shows up in the bottom-right dock.
         </span>
       )}
     </div>

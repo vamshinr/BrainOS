@@ -1,10 +1,11 @@
+import { BACKEND_URL } from "@/lib/backend";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
 export async function GET() {
   try {
-    const res = await fetch("http://localhost:8081/api/models", { cache: "no-store" });
+    const res = await fetch(`${BACKEND_URL}/api/models`, { cache: "no-store" });
     if (!res.ok) throw new Error(`Backend ${res.status}`);
     return NextResponse.json(await res.json());
   } catch (e) {

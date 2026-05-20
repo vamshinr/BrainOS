@@ -105,9 +105,19 @@ class SlackMCPClient:
         raise last_error or SlackMCPError("No Slack MCP tool variant succeeded.")
 
     def search_messages(self, query: str, **kwargs: Any) -> Any:
+        # mcp.slack.com exposes `slack_search_public_and_private` and
+        # `slack_search_public`; legacy names kept as fallbacks for older
+        # MCP server versions.
+        args = _compact_args({"query": query, **kwargs})
         return self.call_first_tool(
-            ["slack_search", "slack_search_messages", "search_messages"],
-            _compact_args({"query": query, **kwargs}),
+            [
+                "slack_search_public_and_private",
+                "slack_search_public",
+                "slack_search",
+                "slack_search_messages",
+                "search_messages",
+            ],
+            args,
         )
 
     def read_channel(self, channel_id: str, **kwargs: Any) -> Any:
@@ -117,10 +127,17 @@ class SlackMCPClient:
         )
 
     def read_thread(self, channel_id: str, thread_ts: str, **kwargs: Any) -> Any:
-        return self.call_first_tool(
-            ["slack_read_thread", "slack_get_thread", "read_thread"],
-            _compact_args({"channel_id": channel_id, "thread_ts": thread_ts, **kwargs}),
-        )
+        # mcp.slack.com's `slack_read_thread` requires `message_ts` (the ts of
+        # the parent message), not `thread_ts`. Try both shapes so the call
+        # works against either parameter name.
+        extra = dict(kwargs)
+        return self.call_tool_variants([
+            ("slack_read_thread", _compact_args({"channel_id": channel_id, "message_ts": thread_ts, **extra})),
+            ("slack_read_thread", _compact_args({"channel_id": channel_id, "thread_ts": thread_ts, **extra})),
+            ("slack_get_thread", _compact_args({"channel_id": channel_id, "message_ts": thread_ts, **extra})),
+            ("slack_get_thread", _compact_args({"channel_id": channel_id, "thread_ts": thread_ts, **extra})),
+            ("read_thread", _compact_args({"channel_id": channel_id, "thread_ts": thread_ts, **extra})),
+        ])
 
     def send_message(self, channel_id: str, text: str, **kwargs: Any) -> Any:
         extra = dict(kwargs)

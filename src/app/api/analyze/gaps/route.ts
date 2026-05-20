@@ -1,10 +1,11 @@
+import { BACKEND_URL } from "@/lib/backend";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
 export async function POST() {
   try {
-    const res = await fetch("http://localhost:8081/api/analyze/gaps", {
+    const res = await fetch(`${BACKEND_URL}/api/analyze/gaps`, {
       method: "POST",
     });
     if (!res.ok) {

@@ -1,3 +1,4 @@
+import { BACKEND_URL } from "@/lib/backend";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -10,7 +11,7 @@ const Body = z.object({
 
 export async function GET() {
   try {
-    const backendRes = await fetch("http://localhost:8081/api/slack/channel_map", {
+    const backendRes = await fetch(`${BACKEND_URL}/api/slack/channel_map`, {
       cache: "no-store",
     });
     if (!backendRes.ok) {
@@ -32,7 +33,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const backendRes = await fetch("http://localhost:8081/api/slack/channel_map", {
+    const backendRes = await fetch(`${BACKEND_URL}/api/slack/channel_map`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

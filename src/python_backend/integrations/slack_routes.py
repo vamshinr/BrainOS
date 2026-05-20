@@ -17,6 +17,7 @@ from slack_mcp.canvas import export_canvas
 from slack_mcp.client import SlackMCPClient, SlackMCPError
 from slack_mcp.ingest import ingest_slack_document
 from slack_mcp.normalizer import build_source_document
+from slack_mcp.schemas import SlackSourceDocument
 
 
 class SlackThreadIngestRequest(BaseModel):
@@ -82,6 +83,7 @@ def create_slack_router(
     utc_now_iso: Callable[[], str],
     debug_event: Callable[..., None],
     is_sensitive: Callable[[str], str | None],
+    enqueue_realtime_ingest: Callable[[SlackSourceDocument, bool], dict[str, Any]] | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/slack", tags=["slack-mcp"])
 
@@ -137,8 +139,13 @@ def create_slack_router(
             "bot_user_id_configured": bool(config.bot_user_id),
             "allowed_channels": sorted(config.allowed_channels),
             "auto_answer_channels": sorted(config.auto_answer_channels),
+            "realtime_ingest_channels": sorted(config.realtime_ingest_channels),
+            "ceo_decision_alert_channels": sorted(config.ceo_decision_alert_channels),
+            "realtime_ingest_enabled": bool(config.realtime_ingest_channels),
+            "ceo_decision_alerts_enabled": bool(config.ceo_decision_alert_channels),
             "auto_answer_prefixes": list(config.auto_answer_prefixes),
             "default_department": config.default_department,
+            "channel_map": config.channel_map,
             "channel_map_entries": len(config.channel_map),
         }
         if not config.configured:
@@ -490,6 +497,42 @@ def create_slack_router(
                 return stripped[len(prefix):].strip(" :-\t")
         return None
 
+    def _slack_event_document(
+        *,
+        event: dict[str, Any],
+        channel_id: str,
+        department: str,
+        text: str,
+    ) -> SlackSourceDocument:
+        ts = str(event.get("ts") or "")
+        thread_ts = str(event.get("thread_ts") or ts or "")
+        user = str(event.get("user") or "unknown")
+        channel_name = str(event.get("channel_name") or channel_id)
+        title = f"Slack Realtime: {channel_name}"
+        if thread_ts:
+            title = f"{title} / {thread_ts}"
+        lines = [
+            title,
+            "",
+            f"channel: {channel_name}",
+            f"channel_id: {channel_id}",
+            f"thread_ts: {thread_ts}",
+            f"department: {department}",
+            "",
+            f"{user} [{ts}]",
+            text,
+        ]
+        return SlackSourceDocument(
+            title=title,
+            content="\n".join(lines).strip(),
+            channel_id=channel_id,
+            channel_name=channel_name,
+            thread_ts=thread_ts or None,
+            department=department,
+            message_count=1,
+            raw={"event_ts": ts, "event_type": event.get("type"), "user": user},
+        )
+
     @router.post("/events")
     async def events(
         request: Request,
@@ -520,12 +563,36 @@ def create_slack_router(
         _ensure_channel_allowed(client, channel_id)
 
         text = _strip_slack_mentions(str(event.get("text") or ""), client.config.bot_user_id)
+        realtime_job = None
+        if (
+            enqueue_realtime_ingest
+            and event_type == "message"
+            and text
+            and channel_id in client.config.realtime_ingest_channels
+        ):
+            department = client.config.department_for_channel(channel_id)
+            alert_enabled = channel_id in client.config.ceo_decision_alert_channels
+            doc = _slack_event_document(
+                event=event,
+                channel_id=channel_id,
+                department=department,
+                text=text,
+            )
+            realtime_job = enqueue_realtime_ingest(doc, alert_enabled)
+            debug_event(
+                "slack.events.realtime_ingest.queued",
+                "Queued realtime Slack message ingestion",
+                channel_id=channel_id,
+                job_id=realtime_job.get("job_id"),
+                ceo_alerts=alert_enabled,
+            )
+
         if event_type == "app_mention":
             question = text
         elif channel_id in client.config.auto_answer_channels:
             question = _auto_answer_question(text, client.config.auto_answer_prefixes)
         else:
-            return {"ok": True, "ignored": "auto_answer_not_enabled_for_channel"}
+            return {"ok": True, "queued_realtime_ingest": realtime_job}
 
         if not question:
             return {"ok": True, "ignored": "empty_question"}

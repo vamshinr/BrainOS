@@ -1,3 +1,4 @@
+import { BACKEND_URL } from "@/lib/backend";
 import { SEED_SOURCES } from "@/lib/seed-data";
 import { invalidateCache } from "@/lib/store";
 
@@ -21,9 +22,8 @@ export async function POST() {
         send({ type: "source:start", index: i, title: seed.title, kind: seed.kind });
 
         try {
-          // Route through the Python backend so extraction runs on the 70B model
-          // on the AMD MI300X and embeddings land in ChromaDB.
-          const res = await fetch("http://localhost:8081/api/ingest", {
+          // Route through the Python backend so extraction runs and embeddings land in ChromaDB.
+          const res = await fetch(`${BACKEND_URL}/api/ingest`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({

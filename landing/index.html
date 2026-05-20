@@ -1,0 +1,2032 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BrainOS — The OS for Company Knowledge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0a0a0a;
+  --fg: #fafafa;
+  --card: #111113;
+  --muted: #18181b;
+  --muted-fg: #a1a1aa;
+  --border: #27272a;
+  --accent: #ff5722;
+  --accent-dim: rgba(255,87,34,0.15);
+  --accent-mid: rgba(255,87,34,0.4);
+
+  /* Graph entity colors matching the platform */
+  --violet: #a78bfa;
+  --blue: #60a5fa;
+  --cyan: #22d3ee;
+  --emerald: #34d399;
+  --lime: #a3e635;
+  --amber: #fbbf24;
+  --orange: #fb923c;
+  --pink: #f472b6;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  overflow-x: hidden;
+  line-height: 1.6;
+  font-feature-settings: "ss01", "cv11";
+}
+
+/* ── NAV ── */
+nav {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  background: rgba(10,10,10,0.88);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 10px 20px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  white-space: nowrap;
+}
+
+.nav-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}
+.nav-logo svg { width: 22px; height: 22px; }
+.nav-wordmark { font-size: 14px; font-weight: 700; color: var(--fg); letter-spacing: -0.02em; }
+.nav-wordmark span { color: var(--accent); }
+
+.nav-links {
+  display: flex;
+  gap: 4px;
+  list-style: none;
+}
+.nav-links a {
+  color: var(--muted-fg);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s;
+}
+.nav-links a:hover { color: var(--fg); background: var(--muted); }
+
+.nav-cta {
+  background: var(--fg);
+  color: var(--bg);
+  border: none;
+  border-radius: 999px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: opacity 0.15s;
+  font-family: inherit;
+}
+.nav-cta:hover { opacity: 0.88; }
+
+/* ── HERO ── */
+#hero {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  overflow: hidden;
+  padding: 120px 24px 80px;
+}
+
+.hero-bg-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.04;
+  pointer-events: none;
+}
+
+.blob {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -52%);
+  width: 560px;
+  height: 460px;
+  background: rgba(255,87,34,0.06);
+  border-radius: 60% 40% 55% 45% / 50% 60% 40% 50%;
+  z-index: 0;
+  filter: blur(40px);
+}
+
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.hero-content {
+  position: relative;
+  z-index: 2;
+  max-width: 800px;
+}
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--muted-fg);
+  text-transform: uppercase;
+  margin-bottom: 32px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-family: 'Geist Mono', monospace;
+}
+.hero-badge-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+h1.hero-h1 {
+  font-size: clamp(52px, 7.5vw, 90px);
+  font-weight: 300;
+  line-height: 1.05;
+  margin-bottom: 24px;
+  letter-spacing: -0.03em;
+  color: var(--fg);
+}
+h1.hero-h1 em {
+  font-style: normal;
+  color: var(--accent);
+}
+
+.hero-sub {
+  font-size: 18px;
+  color: var(--muted-fg);
+  max-width: 480px;
+  margin: 0 auto 40px;
+  line-height: 1.6;
+  font-weight: 400;
+}
+
+.hero-btns {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 56px;
+}
+
+.btn-primary {
+  background: var(--fg);
+  color: var(--bg);
+  border: none;
+  border-radius: 8px;
+  padding: 12px 24px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: opacity 0.15s;
+  font-family: inherit;
+}
+.btn-primary:hover { opacity: 0.88; }
+
+.btn-secondary {
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 24px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: border-color 0.15s;
+  font-family: inherit;
+}
+.btn-secondary:hover { border-color: var(--accent-mid); }
+
+.hero-ticker {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--border);
+  text-transform: uppercase;
+  font-family: 'Geist Mono', monospace;
+}
+
+/* ── SECTION COMMON ── */
+section {
+  padding: 96px 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+section.visible { opacity: 1; transform: translateY(0); }
+
+.full-bleed { max-width: 100%; padding-left: 0; padding-right: 0; }
+.full-bleed > * { max-width: 1200px; margin-left: auto; margin-right: auto; padding-left: 24px; padding-right: 24px; }
+
+.section-label {
+  font-size: 11px;
+  letter-spacing: 0.15em;
+  color: var(--accent);
+  text-transform: uppercase;
+  margin-bottom: 20px;
+  display: block;
+  font-family: 'Geist Mono', monospace;
+  font-weight: 500;
+}
+
+h2.display {
+  font-size: clamp(36px, 5.5vw, 68px);
+  font-weight: 300;
+  line-height: 1.1;
+  margin-bottom: 20px;
+  letter-spacing: -0.025em;
+}
+h2.display em { font-style: normal; color: var(--accent); }
+h2.display .violet { color: var(--violet); }
+h2.display .cyan { color: var(--cyan); }
+h2.display .lime { color: var(--lime); }
+
+.section-sub {
+  font-size: 17px;
+  color: var(--muted-fg);
+  max-width: 560px;
+  margin-bottom: 52px;
+  line-height: 1.65;
+  font-weight: 400;
+}
+
+/* ── PROBLEM CARDS ── */
+.card-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.stat-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 22px;
+  transition: border-color 0.15s;
+}
+.stat-card:hover { border-color: var(--accent-mid); }
+
+.stat-card .card-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  margin-bottom: 14px;
+}
+
+.stat-card .card-pct {
+  font-size: 36px;
+  font-weight: 300;
+  color: var(--fg);
+  line-height: 1;
+  margin-bottom: 6px;
+  letter-spacing: -0.03em;
+}
+
+.stat-card .card-label {
+  font-size: 12px;
+  color: var(--muted-fg);
+  margin-bottom: 14px;
+}
+
+.progress-bar {
+  height: 2px;
+  background: var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 1.2s ease;
+}
+
+.big-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.big-stat-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 28px;
+  transition: border-color 0.15s;
+}
+.big-stat-card:hover { border-color: var(--accent-mid); }
+
+.big-stat-card .stat-val {
+  font-size: 36px;
+  color: var(--accent);
+  font-weight: 300;
+  margin-bottom: 10px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.big-stat-card p {
+  font-size: 13px;
+  color: var(--muted-fg);
+  line-height: 1.55;
+}
+
+/* ── INSIGHT CARDS ── */
+.trend-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 48px;
+}
+
+.trend-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 28px;
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  transition: border-color 0.15s;
+}
+.trend-card:hover { border-color: var(--accent-mid); }
+
+.trend-date {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  font-size: 10px;
+  color: var(--border);
+  letter-spacing: 0.08em;
+  font-family: 'Geist Mono', monospace;
+}
+
+.trend-icon {
+  font-size: 22px;
+  margin-bottom: 18px;
+}
+
+.trend-card h3 {
+  font-size: 18px;
+  font-weight: 500;
+  margin-bottom: 10px;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.trend-card p {
+  font-size: 13px;
+  color: var(--muted-fg);
+  flex: 1;
+  line-height: 1.6;
+}
+
+.trend-footer {
+  margin-top: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--border);
+  font-family: 'Geist Mono', monospace;
+}
+
+.trend-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.wedge-text {
+  text-align: center;
+  font-size: clamp(18px, 2.5vw, 26px);
+  color: var(--muted-fg);
+  font-weight: 400;
+}
+.wedge-text strong { color: var(--fg); font-weight: 500; }
+.wedge-text em { font-style: normal; color: var(--accent); }
+
+/* ── TICKER ── */
+.ticker-wrap {
+  overflow: hidden;
+  padding: 36px 0;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  opacity: 1 !important;
+  transform: none !important;
+}
+
+.ticker-track {
+  display: flex;
+  width: max-content;
+  animation: marquee 40s linear infinite;
+}
+
+.ticker-text {
+  font-family: 'Geist Mono', monospace;
+  font-size: clamp(52px, 7vw, 96px);
+  color: var(--muted);
+  white-space: nowrap;
+  padding-right: 80px;
+  line-height: 1;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
+
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+/* ── HOW IT WORKS ── */
+#how-it-works {
+  max-width: 1200px;
+  padding: 96px 24px;
+}
+
+.how-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 56px;
+  align-items: start;
+}
+
+.steps-list { display: flex; flex-direction: column; gap: 0; }
+
+.step-item {
+  display: flex;
+  gap: 18px;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.25s;
+}
+
+.step-num {
+  font-size: 10px;
+  color: var(--border);
+  font-family: 'Geist Mono', monospace;
+  min-width: 22px;
+  padding-top: 4px;
+}
+
+.step-name {
+  font-size: 20px;
+  font-weight: 400;
+  color: var(--muted-fg);
+  margin-bottom: 3px;
+  transition: color 0.25s;
+  letter-spacing: -0.015em;
+}
+.step-item.active .step-name { color: var(--accent); }
+.step-item.active .step-num { color: var(--accent); }
+
+.step-sub {
+  font-size: 12px;
+  font-family: 'Geist Mono', monospace;
+  color: var(--border);
+  opacity: 0;
+  max-height: 0;
+  overflow: hidden;
+  transition: opacity 0.3s, max-height 0.3s;
+}
+.step-item.active .step-sub { opacity: 1; max-height: 40px; color: var(--muted-fg); }
+
+/* ── GRAPH CANVAS ── */
+.graph-wrap {
+  position: sticky;
+  top: 100px;
+  height: 480px;
+}
+
+#graph-canvas {
+  width: 100%;
+  height: 100%;
+  border-radius: 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+}
+
+/* ── AGENTS SECTION ── */
+.agents-layout {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.agent-list { display: flex; flex-direction: column; gap: 6px; }
+
+.agent-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.agent-card:hover { border-color: var(--accent-mid); }
+.agent-card.active { border-color: var(--accent); background: rgba(255,87,34,0.05); }
+
+.agent-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  flex-shrink: 0;
+}
+
+.agent-info { flex: 1; }
+.agent-name { font-size: 14px; font-weight: 500; color: var(--fg); }
+.agent-num { font-size: 10px; color: var(--border); font-family: 'Geist Mono', monospace; }
+.agent-desc { font-size: 12px; color: var(--muted-fg); margin-top: 2px; }
+
+.agent-arrow { color: var(--border); font-size: 13px; }
+.agent-card.active .agent-arrow { color: var(--accent); }
+
+.agent-detail {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 28px;
+  transition: opacity 0.2s;
+}
+
+.agent-detail-header {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--muted-fg);
+  font-family: 'Geist Mono', monospace;
+  margin-bottom: 18px;
+  text-transform: uppercase;
+}
+
+.agent-bullets {
+  list-style: none;
+  margin-bottom: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agent-bullets li {
+  font-size: 14px;
+  color: var(--muted-fg);
+  padding-left: 18px;
+  position: relative;
+  line-height: 1.55;
+}
+.agent-bullets li::before {
+  content: '—';
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+  font-weight: 300;
+}
+
+.terminal {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  font-family: 'Geist Mono', monospace;
+  font-size: 12px;
+}
+.terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--muted);
+}
+.terminal-dots { display: flex; gap: 6px; }
+.terminal-dots span { width: 10px; height: 10px; border-radius: 50%; }
+.terminal-title { font-size: 10px; color: var(--muted-fg); letter-spacing: 0.08em; }
+.terminal-body { padding: 14px; line-height: 1.9; }
+.t-comment { color: var(--accent); }
+.t-dim { color: var(--muted-fg); }
+.t-sep { color: var(--border); }
+.t-key { color: var(--lime); }
+.t-val { color: var(--cyan); }
+
+/* ── DEMO STEPS ── */
+.demo-steps { display: flex; flex-direction: column; gap: 10px; }
+
+.demo-step {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 24px 28px;
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  transition: border-color 0.15s;
+}
+.demo-step:hover { border-color: var(--accent-mid); }
+
+.demo-step-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.demo-step-body { flex: 1; }
+.demo-step-label {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--border);
+  margin-bottom: 5px;
+  text-transform: uppercase;
+  font-family: 'Geist Mono', monospace;
+}
+.demo-step-title { font-size: 18px; font-weight: 500; margin-bottom: 6px; letter-spacing: -0.01em; }
+.demo-step-desc { font-size: 13px; color: var(--muted-fg); line-height: 1.6; }
+
+.demo-badge {
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 10px;
+  font-family: 'Geist Mono', monospace;
+  color: var(--muted-fg);
+  white-space: nowrap;
+  align-self: center;
+  flex-shrink: 0;
+  letter-spacing: 0.06em;
+}
+
+/* ── SKILLS OUTPUT ── */
+.skills-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  align-items: center;
+}
+
+.pill-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+.pill-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 12px;
+  color: var(--muted-fg);
+  transition: border-color 0.15s;
+}
+.pill-tag:hover { border-color: var(--accent-mid); }
+.pill-dot { width: 5px; height: 5px; border-radius: 50%; }
+
+.skills-note { font-size: 13px; color: var(--muted-fg); }
+.skills-note strong { color: var(--muted-fg); font-family: 'Geist Mono', monospace; }
+
+.skills-terminal {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  font-family: 'Geist Mono', monospace;
+  font-size: 12px;
+}
+.skills-terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--muted);
+}
+.skills-file-info { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.skills-file-info .fname { color: var(--fg); font-weight: 500; }
+.skills-file-info .fmeta { color: var(--muted-fg); font-size: 10px; }
+.skills-synced { font-size: 11px; color: var(--accent); }
+.skills-body { padding: 14px; line-height: 2; max-height: 400px; overflow-y: auto; }
+.skills-body::-webkit-scrollbar { width: 3px; }
+.skills-body::-webkit-scrollbar-track { background: transparent; }
+.skills-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+.sk-h1 { color: var(--accent); }
+.sk-h2 { color: var(--cyan); }
+.sk-h3 { color: var(--fg); font-weight: 500; }
+.sk-dim { color: var(--muted-fg); font-style: italic; }
+.sk-warn { color: var(--amber); }
+.sk-ok { color: var(--lime); }
+.sk-bold { font-weight: 600; color: var(--fg); }
+.skills-terminal-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+}
+.skills-terminal-footer .left { color: var(--muted-fg); }
+.skills-terminal-footer .right { color: var(--accent); }
+
+/* ── RAG TABLE ── */
+.rag-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 36px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+thead tr {
+  background: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+thead th {
+  padding: 16px 18px;
+  text-align: center;
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--muted-fg);
+}
+thead th:first-child { text-align: left; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; font-family: 'Geist Mono', monospace; }
+thead th .th-name { color: var(--fg); display: block; margin-bottom: 3px; font-size: 13px; }
+thead th .th-sub { color: var(--border); font-size: 9px; letter-spacing: 0.08em; font-weight: 400; text-transform: uppercase; }
+thead th.brainos-col .th-name { color: var(--accent); }
+
+tbody tr { border-bottom: 1px solid var(--border); transition: background 0.1s; }
+tbody tr:last-child { border-bottom: none; }
+tbody tr:hover { background: var(--muted); }
+tbody td { padding: 14px 18px; text-align: center; color: var(--muted-fg); }
+tbody td:first-child { text-align: left; color: var(--fg); font-size: 13px; }
+
+.check { color: var(--accent); font-size: 16px; }
+.cross { color: var(--border); font-size: 14px; }
+.dash { color: var(--muted-fg); }
+
+.rag-example {
+  text-align: center;
+  font-size: 15px;
+  color: var(--fg);
+  max-width: 760px;
+  margin: 0 auto;
+  line-height: 1.7;
+  font-weight: 400;
+}
+.rag-example em { font-style: normal; color: var(--muted-fg); }
+
+/* ── STACK ── */
+.stack-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  margin-bottom: 28px;
+}
+.stack-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 24px;
+  transition: border-color 0.15s;
+}
+.stack-card:hover { border-color: var(--accent-mid); }
+.stack-layer-label {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--border);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  font-family: 'Geist Mono', monospace;
+}
+.stack-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.stack-icon {
+  width: 34px; height: 34px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px;
+}
+.stack-card h3 { font-size: 16px; font-weight: 500; letter-spacing: -0.01em; }
+.stack-bullets { list-style: none; display: flex; flex-direction: column; gap: 5px; }
+.stack-bullets li { font-size: 12px; color: var(--muted-fg); font-family: 'Geist Mono', monospace; line-height: 1.55; }
+
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 7px 18px;
+  font-size: 11px;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-family: 'Geist Mono', monospace;
+}
+
+/* ── FEATURES STRIP ── */
+.features-strip {
+  display: grid;
+  grid-template-columns: repeat(5, 270px);
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+.features-strip::-webkit-scrollbar { height: 3px; }
+.features-strip::-webkit-scrollbar-track { background: transparent; }
+.features-strip::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.feature-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 22px;
+  flex-shrink: 0;
+  transition: border-color 0.15s;
+}
+.feature-card:hover { border-color: var(--accent-mid); }
+.feature-arrow { color: var(--accent); font-size: 13px; margin-bottom: 14px; display: block; }
+.feature-card h3 { font-size: 14px; font-weight: 600; margin-bottom: 8px; letter-spacing: -0.01em; }
+.feature-card p { font-size: 12px; color: var(--muted-fg); line-height: 1.6; }
+
+/* ── CLOSING CTA ── */
+#closing {
+  max-width: 1200px;
+  padding: 48px 24px 96px;
+}
+.closing-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 72px 56px;
+  text-align: center;
+}
+.closing-badge {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--border);
+  text-transform: uppercase;
+  margin-bottom: 28px;
+  display: block;
+  font-family: 'Geist Mono', monospace;
+}
+.closing-card h2 {
+  font-size: clamp(32px, 4.5vw, 58px);
+  font-weight: 300;
+  line-height: 1.1;
+  margin-bottom: 20px;
+  letter-spacing: -0.025em;
+}
+.closing-card h2 em { font-style: normal; color: var(--accent); }
+.closing-card .section-sub { margin: 0 auto 36px; text-align: center; }
+.closing-btns { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 36px; }
+.btn-accent {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 14px 28px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: opacity 0.15s;
+  font-family: inherit;
+}
+.btn-accent:hover { opacity: 0.88; }
+.closing-attrs {
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  color: var(--border);
+  text-transform: uppercase;
+  font-family: 'Geist Mono', monospace;
+}
+
+/* ── FOOTER ── */
+footer {
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  padding: 56px 24px 0;
+}
+.footer-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  gap: 48px;
+  padding-bottom: 48px;
+}
+.footer-brand-desc {
+  font-size: 13px;
+  color: var(--muted-fg);
+  line-height: 1.7;
+  margin: 14px 0 18px;
+  max-width: 260px;
+}
+.footer-hackathon {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--border);
+  text-transform: uppercase;
+  font-family: 'Geist Mono', monospace;
+}
+.footer-col h4 {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--muted-fg);
+  text-transform: uppercase;
+  margin-bottom: 14px;
+  font-family: 'Geist Mono', monospace;
+}
+.footer-col a {
+  display: block;
+  font-size: 13px;
+  color: var(--muted-fg);
+  text-decoration: none;
+  margin-bottom: 8px;
+  transition: color 0.15s;
+}
+.footer-col a:hover { color: var(--fg); }
+.footer-bottom {
+  max-width: 1200px;
+  margin: 0 auto;
+  border-top: 1px solid var(--border);
+  padding: 18px 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.footer-bottom span { font-size: 10px; color: var(--border); font-family: 'Geist Mono', monospace; letter-spacing: 0.06em; }
+
+/* ── FLOATING ORBS ── */
+@keyframes float1 {
+  0%, 100% { transform: translateY(0px) translateX(0px); }
+  50% { transform: translateY(-18px) translateX(6px); }
+}
+@keyframes float2 {
+  0%, 100% { transform: translateY(0px) translateX(0px); }
+  50% { transform: translateY(14px) translateX(-10px); }
+}
+@keyframes float3 {
+  0%, 100% { transform: translateY(-8px) translateX(0px); }
+  50% { transform: translateY(12px) translateX(8px); }
+}
+@keyframes float4 {
+  0%, 100% { transform: translateY(0px) translateX(8px); }
+  50% { transform: translateY(-14px) translateX(-5px); }
+}
+@keyframes float5 {
+  0%, 100% { transform: translateY(6px); }
+  50% { transform: translateY(-14px); }
+}
+
+/* ── MOBILE ── */
+@media (max-width: 900px) {
+  .nav-links { display: none; }
+  nav { gap: 12px; }
+  h2.display { font-size: clamp(28px, 7vw, 48px); }
+  .card-grid-3 { grid-template-columns: 1fr; }
+  .big-stat-grid { grid-template-columns: 1fr; }
+  .trend-grid { grid-template-columns: 1fr; }
+  .how-layout { grid-template-columns: 1fr; }
+  .graph-wrap { display: none; }
+  .agents-layout { grid-template-columns: 1fr; }
+  .skills-layout { grid-template-columns: 1fr; }
+  .stack-grid { grid-template-columns: 1fr; }
+  .footer-inner { grid-template-columns: 1fr 1fr; }
+  .footer-bottom { flex-direction: column; gap: 8px; text-align: center; }
+  .closing-card { padding: 44px 22px; }
+  .demo-step { flex-direction: column; }
+  .demo-badge { align-self: flex-start; }
+  .features-strip { grid-template-columns: repeat(5, 250px); }
+}
+@media (max-width: 600px) {
+  section { padding: 60px 18px; }
+  h1.hero-h1 { font-size: 40px; }
+  .hero-btns { flex-direction: column; align-items: center; }
+  .footer-inner { grid-template-columns: 1fr; }
+  .closing-btns { flex-direction: column; align-items: center; }
+}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a href="#" class="nav-logo">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2L21.5 7.5V16.5L12 22L2.5 16.5V7.5L12 2Z" stroke="#ff5722" stroke-width="1.5" fill="none"/>
+      <circle cx="12" cy="12" r="3" fill="#ff5722"/>
+    </svg>
+    <span class="nav-wordmark">brain<span>os</span></span>
+  </a>
+  <ul class="nav-links">
+    <li><a href="#how-it-works">How it works</a></li>
+    <li><a href="#agents">Agents</a></li>
+    <li><a href="#why-not-rag">Why not RAG</a></li>
+    <li><a href="#stack">Stack</a></li>
+  </ul>
+  <a href="http://129.212.176.117:3000" target="_blank" class="nav-cta">Live demo ↗</a>
+</nav>
+
+<!-- HERO -->
+<section id="hero" style="opacity:1;transform:none;max-width:100%;padding:0;">
+  <!-- SVG Network Background -->
+  <svg class="hero-bg-svg" viewBox="0 0 1400 900" preserveAspectRatio="xMidYMid slice">
+    <line x1="100" y1="150" x2="300" y2="250" stroke="#ff5722" stroke-width="0.8"/>
+    <line x1="300" y1="250" x2="550" y2="180" stroke="#22d3ee" stroke-width="0.8"/>
+    <line x1="550" y1="180" x2="700" y2="320" stroke="#ff5722" stroke-width="0.8"/>
+    <line x1="700" y1="320" x2="900" y2="200" stroke="#a78bfa" stroke-width="0.8"/>
+    <line x1="900" y1="200" x2="1100" y2="300" stroke="#22d3ee" stroke-width="0.8"/>
+    <line x1="1100" y1="300" x2="1300" y2="180" stroke="#ff5722" stroke-width="0.8"/>
+    <line x1="200" y1="450" x2="450" y2="380" stroke="#a78bfa" stroke-width="0.8"/>
+    <line x1="450" y1="380" x2="600" y2="500" stroke="#ff5722" stroke-width="0.8"/>
+    <line x1="600" y1="500" x2="800" y2="420" stroke="#22d3ee" stroke-width="0.8"/>
+    <line x1="800" y1="420" x2="1000" y2="520" stroke="#ff5722" stroke-width="0.8"/>
+    <line x1="1000" y1="520" x2="1200" y2="420" stroke="#a78bfa" stroke-width="0.8"/>
+    <line x1="300" y1="650" x2="500" y2="580" stroke="#22d3ee" stroke-width="0.8"/>
+    <line x1="500" y1="580" x2="700" y2="680" stroke="#ff5722" stroke-width="0.8"/>
+    <line x1="700" y1="680" x2="950" y2="600" stroke="#a78bfa" stroke-width="0.8"/>
+    <line x1="950" y1="600" x2="1150" y2="700" stroke="#ff5722" stroke-width="0.8"/>
+    <line x1="100" y1="150" x2="200" y2="450" stroke="#ff5722" stroke-width="0.4"/>
+    <line x1="300" y1="250" x2="450" y2="380" stroke="#22d3ee" stroke-width="0.4"/>
+    <line x1="550" y1="180" x2="600" y2="500" stroke="#a78bfa" stroke-width="0.4"/>
+    <line x1="700" y1="320" x2="700" y2="680" stroke="#ff5722" stroke-width="0.4"/>
+    <line x1="900" y1="200" x2="800" y2="420" stroke="#22d3ee" stroke-width="0.4"/>
+    <line x1="1100" y1="300" x2="1000" y2="520" stroke="#ff5722" stroke-width="0.4"/>
+    <circle cx="100" cy="150" r="3" fill="#ff5722"/>
+    <circle cx="300" cy="250" r="4" fill="#22d3ee"/>
+    <circle cx="550" cy="180" r="3" fill="#ff5722"/>
+    <circle cx="700" cy="320" r="5" fill="#a78bfa"/>
+    <circle cx="900" cy="200" r="3" fill="#22d3ee"/>
+    <circle cx="1100" cy="300" r="4" fill="#ff5722"/>
+    <circle cx="200" cy="450" r="3" fill="#a78bfa"/>
+    <circle cx="450" cy="380" r="5" fill="#ff5722"/>
+    <circle cx="600" cy="500" r="3" fill="#22d3ee"/>
+    <circle cx="800" cy="420" r="4" fill="#ff5722"/>
+    <circle cx="1000" cy="520" r="3" fill="#a78bfa"/>
+    <circle cx="300" cy="650" r="3" fill="#ff5722"/>
+    <circle cx="700" cy="680" r="4" fill="#22d3ee"/>
+    <circle cx="950" cy="600" r="3" fill="#ff5722"/>
+    <circle cx="1300" cy="180" r="3" fill="#a78bfa"/>
+  </svg>
+
+  <!-- Blob -->
+  <div class="blob"></div>
+
+  <!-- Floating Orbs — platform graph entity colors -->
+  <div class="orb" style="width:65px;height:65px;background:rgba(34,211,238,0.18);top:15%;left:18%;animation:float1 12s ease-in-out infinite;"></div>
+  <div class="orb" style="width:13px;height:13px;background:#22d3ee;top:22%;left:50%;animation:float3 9s ease-in-out infinite;"></div>
+  <div class="orb" style="width:48px;height:48px;background:rgba(167,139,250,0.2);top:12%;right:22%;animation:float2 15s ease-in-out infinite;"></div>
+  <div class="orb" style="width:75px;height:75px;background:rgba(255,87,34,0.12);bottom:22%;left:8%;animation:float4 18s ease-in-out infinite;"></div>
+  <div class="orb" style="width:16px;height:16px;background:#f472b6;bottom:30%;left:25%;animation:float5 10s ease-in-out infinite;"></div>
+  <div class="orb" style="width:34px;height:34px;background:rgba(167,139,250,0.22);top:55%;right:8%;animation:float1 13s ease-in-out infinite 2s;"></div>
+  <div class="orb" style="width:50px;height:50px;background:rgba(34,211,238,0.15);top:65%;right:20%;animation:float3 16s ease-in-out infinite 1s;"></div>
+  <div class="orb" style="width:11px;height:11px;background:#a3e635;bottom:18%;right:32%;animation:float2 8s ease-in-out infinite;"></div>
+  <div class="orb" style="width:20px;height:20px;background:rgba(255,87,34,0.25);top:40%;left:6%;animation:float4 11s ease-in-out infinite 3s;"></div>
+
+  <div class="hero-content">
+    <p class="hero-badge"><span class="hero-badge-dot"></span>AMD HACKATHON · 2026 · MI300X · 192 GB HBM3</p>
+    <h1 class="hero-h1">
+      The OS<br>
+      for <em>company knowledge.</em>
+    </h1>
+    <p class="hero-sub">The layer between scattered company knowledge and AI agents. A live graph, loaded before they act.</p>
+    <div class="hero-btns">
+      <a href="http://129.212.176.117:3000" target="_blank" class="btn-primary">⚡ Live demo ↗</a>
+      <a href="https://github.com/vamshinr/BrainOS" target="_blank" class="btn-secondary">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        github.com/vamshinr/BrainOS
+      </a>
+    </div>
+    <p class="hero-ticker">· DIRECTED GRAPH · SUPERSESSION · GAP DETECTION · MULTIMODAL VLM · SLACK-NATIVE ·</p>
+  </div>
+</section>
+
+<!-- PROBLEM -->
+<section id="problem">
+  <span class="section-label">· The Problem</span>
+  <h2 class="display">Knowledge lives <em>nowhere</em> and<br><span class="cyan">everywhere.</span></h2>
+  <p class="section-sub">The bottleneck isn't writing code — it's context. Agents write code beautifully. They're blind to the company that wrote it.</p>
+
+  <div class="card-grid-3">
+    <div class="stat-card">
+      <div class="card-icon" style="background:rgba(34,211,238,0.12);">💬</div>
+      <div class="card-pct">60%</div>
+      <div class="card-label">Slack threads</div>
+      <div class="progress-bar"><div class="progress-fill" data-width="65" style="background:var(--accent);width:0"></div></div>
+    </div>
+    <div class="stat-card">
+      <div class="card-icon" style="background:rgba(96,165,250,0.12);">📄</div>
+      <div class="card-pct">15%</div>
+      <div class="card-label">Notion / Confluence</div>
+      <div class="progress-bar"><div class="progress-fill" data-width="20" style="background:var(--cyan);width:0"></div></div>
+    </div>
+    <div class="stat-card">
+      <div class="card-icon" style="background:rgba(167,139,250,0.12);">📧</div>
+      <div class="card-pct">10%</div>
+      <div class="card-label">Google Docs</div>
+      <div class="progress-bar"><div class="progress-fill" data-width="15" style="background:var(--violet);width:0"></div></div>
+    </div>
+    <div class="stat-card">
+      <div class="card-icon" style="background:rgba(244,114,182,0.12);">🎫</div>
+      <div class="card-pct">8%</div>
+      <div class="card-label">Linear / Jira / PRs</div>
+      <div class="progress-bar"><div class="progress-fill" data-width="10" style="background:var(--pink);width:0"></div></div>
+    </div>
+    <div class="stat-card">
+      <div class="card-icon" style="background:rgba(251,191,36,0.12);">🎥</div>
+      <div class="card-pct">5%</div>
+      <div class="card-label">Loom / transcripts</div>
+      <div class="progress-bar"><div class="progress-fill" data-width="7" style="background:var(--amber);width:0"></div></div>
+    </div>
+    <div class="stat-card">
+      <div class="card-icon" style="background:rgba(161,161,170,0.12);">👤</div>
+      <div class="card-pct">2%</div>
+      <div class="card-label">Three engineers' heads</div>
+      <div class="progress-bar"><div class="progress-fill" data-width="3" style="background:var(--muted-fg);width:0"></div></div>
+    </div>
+  </div>
+
+  <div class="big-stat-grid">
+    <div class="big-stat-card">
+      <div class="stat-val">3–6 months</div>
+      <p>for a new hire to become productive. Mostly context, not skill.</p>
+    </div>
+    <div class="big-stat-card">
+      <div class="stat-val">2.5 hrs/week</div>
+      <p>every engineer wastes searching for info they know exists.</p>
+    </div>
+    <div class="big-stat-card">
+      <div class="stat-val">40% evaporates</div>
+      <p>of a senior's tribal knowledge — within 30 days of leaving.</p>
+    </div>
+  </div>
+</section>
+
+<!-- INSIGHT -->
+<section id="insight">
+  <span class="section-label">· The Insight</span>
+  <h2 class="display">Three things just became true <em>at the same time.</em></h2>
+  <p class="section-sub">BrainOS sits at their intersection. This window opened 18 months ago. It closes in 18 more.</p>
+
+  <div class="trend-grid">
+    <div class="trend-card">
+      <span class="trend-date">2024 → NOW</span>
+      <div class="trend-icon">✨</div>
+      <h3>Open-weight LLMs got good enough.</h3>
+      <p>Qwen 32B text + Qwen2-VL 7B reliably extract structured facts from messy real-world inputs — Slack, PDFs, whiteboards, diagrams.</p>
+      <div class="trend-footer">
+        <div class="trend-dot" style="background:var(--accent)"></div>
+        TREND 01
+      </div>
+    </div>
+    <div class="trend-card">
+      <span class="trend-date">2025</span>
+      <div class="trend-icon">📋</div>
+      <h3>Agents now consume skills files.</h3>
+      <p>Claude Skills, GPTs, Cursor rules, Aider conventions. Every major agent has a stable context-file format. The plug exists. Nothing fills it.</p>
+      <div class="trend-footer">
+        <div class="trend-dot" style="background:var(--cyan)"></div>
+        TREND 02
+      </div>
+    </div>
+    <div class="trend-card">
+      <span class="trend-date">2025</span>
+      <div class="trend-icon">⚡</div>
+      <h3>AMD MI300X made it economical.</h3>
+      <p>192 GB HBM3 hosts Qwen 32B + Qwen2-VL 7B + embeddings co-resident on one card. One MI300X replaces 3× H100. &lt;2s end-to-end answer latency.</p>
+      <div class="trend-footer">
+        <div class="trend-dot" style="background:var(--violet)"></div>
+        TREND 03
+      </div>
+    </div>
+  </div>
+
+  <p class="wedge-text">The wedge: <strong>AI agents need a graph,</strong> <em>not a search index.</em></p>
+</section>
+
+<!-- TICKER -->
+<div class="ticker-wrap" style="opacity:1;transform:none;">
+  <div class="ticker-track">
+    <span class="ticker-text">embed · reconcile · supersede · ground · cite · embed · reconcile · supersede · ground · cite · </span>
+    <span class="ticker-text">embed · reconcile · supersede · ground · cite · embed · reconcile · supersede · ground · cite · </span>
+  </div>
+</div>
+
+<!-- HOW IT WORKS -->
+<section id="how-it-works">
+  <span class="section-label">· Watch It Grow · Scroll</span>
+  <h2 class="display">Five steps.<br><em>One brain.</em></h2>
+
+  <div class="how-layout">
+    <div class="steps-list">
+      <div class="step-item active" data-step="0">
+        <span class="step-num">01</span>
+        <div class="step-content">
+          <div class="step-name">Ingest</div>
+          <div class="step-sub">Slack export · whiteboard photo · runbook PDF</div>
+        </div>
+      </div>
+      <div class="step-item" data-step="1">
+        <span class="step-num">02</span>
+        <div class="step-content">
+          <div class="step-name">Extract</div>
+          <div class="step-sub">Entities, atomic facts, directed relationships</div>
+        </div>
+      </div>
+      <div class="step-item" data-step="2">
+        <span class="step-num">03</span>
+        <div class="step-content">
+          <div class="step-name">Map</div>
+          <div class="step-sub">Diagrams become edges. Recordings become ownership.</div>
+        </div>
+      </div>
+      <div class="step-item" data-step="3">
+        <span class="step-num">04</span>
+        <div class="step-content">
+          <div class="step-name">Reconcile</div>
+          <div class="step-sub">New fact arrives. Old fact superseded. Strikethrough.</div>
+        </div>
+      </div>
+      <div class="step-item" data-step="4">
+        <span class="step-num">05</span>
+        <div class="step-content">
+          <div class="step-name">Ground</div>
+          <div class="step-sub">Hybrid retrieval · graph walk · cited answer</div>
+        </div>
+      </div>
+    </div>
+    <div class="graph-wrap">
+      <canvas id="graph-canvas"></canvas>
+    </div>
+  </div>
+</section>
+
+<!-- AGENTS -->
+<section id="agents">
+  <span class="section-label">· The System</span>
+  <h2 class="display">Four agents. <em>Each does one thing well.</em></h2>
+  <p class="section-sub">A multi-agent orchestrator that produces three artifacts: a live knowledge graph, a semantic index, and a SKILLS.md export.</p>
+
+  <div class="agents-layout">
+    <div class="agent-list">
+      <div class="agent-card active" data-agent="0">
+        <div class="agent-icon" style="background:rgba(34,211,238,0.12);">📨</div>
+        <div class="agent-info">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div class="agent-name">IngestionAgent</div>
+            <div class="agent-num">01</div>
+          </div>
+          <div class="agent-desc">Reads everything.</div>
+        </div>
+        <span class="agent-arrow">→</span>
+      </div>
+      <div class="agent-card" data-agent="1">
+        <div class="agent-icon" style="background:rgba(167,139,250,0.12);">🔗</div>
+        <div class="agent-info">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div class="agent-name">StructuringAgent</div>
+            <div class="agent-num">02</div>
+          </div>
+          <div class="agent-desc">Reconciles contradictions.</div>
+        </div>
+        <span class="agent-arrow">→</span>
+      </div>
+      <div class="agent-card" data-agent="2">
+        <div class="agent-icon" style="background:rgba(163,230,53,0.12);">▶️</div>
+        <div class="agent-info">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div class="agent-name">ExecutionAgent</div>
+            <div class="agent-num">03</div>
+          </div>
+          <div class="agent-desc">Answers, with citations.</div>
+        </div>
+        <span class="agent-arrow">→</span>
+      </div>
+      <div class="agent-card" data-agent="3">
+        <div class="agent-icon" style="background:rgba(244,114,182,0.12);">🛡️</div>
+        <div class="agent-info">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div class="agent-name">FeedbackAgent</div>
+            <div class="agent-num">04</div>
+          </div>
+          <div class="agent-desc">Catches hallucinations.</div>
+        </div>
+        <span class="agent-arrow">→</span>
+      </div>
+    </div>
+
+    <div class="agent-detail" id="agent-detail">
+      <div class="agent-detail-header" id="agent-detail-header">AGENT · INGESTION</div>
+      <ul class="agent-bullets" id="agent-bullets">
+        <li>Text, image, PDF, screenshot, recording.</li>
+        <li>VLM converts visual content to rich descriptions.</li>
+        <li>Text LLM extracts entities, atomic facts, and directed relationships.</li>
+      </ul>
+      <div class="terminal">
+        <div class="terminal-header">
+          <div class="terminal-dots">
+            <span style="background:#ff5f57"></span>
+            <span style="background:#febc2e"></span>
+            <span style="background:#28c840"></span>
+          </div>
+          <span class="terminal-title" id="terminal-title">INGESTION.LOG</span>
+        </div>
+        <div class="terminal-body" id="terminal-body">
+          <div><span class="t-comment"># Slack thread → atomic units</span></div>
+          <div><span class="t-dim">&gt; Alice: I'll handle billing now</span></div>
+          <div><span class="t-dim">&gt; Bob: @alice owns billing-svc going forward</span></div>
+          <div><span class="t-sep">────────────────────────────────</span></div>
+          <div><span class="t-dim">extracted: 2 facts, 1 entity, 1 ownership edge</span></div>
+          <div>• <span class="t-key">alice</span> → <span class="t-dim">owns</span> → <span class="t-val">billing-svc</span>     <span class="t-dim">(conf 0.94)</span></div>
+          <div>• <span class="t-key">billing-svc.kind</span> = <span class="t-val">"system"</span>    <span class="t-dim">(conf 0.99)</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- DEMO -->
+<section id="demo">
+  <span class="section-label">· The Demo · 60 Seconds</span>
+  <h2 class="display">Five minutes from cold codebase to an AI agent <em>that knows your company.</em></h2>
+  <p class="section-sub">Open-source, swappable, self-hostable. Run the brain on your own infra — or use the hosted version.</p>
+
+  <div class="demo-steps">
+    <div class="demo-step">
+      <div class="demo-step-icon" style="background:rgba(34,211,238,0.12);">📤</div>
+      <div class="demo-step-body">
+        <div class="demo-step-label">Step 01</div>
+        <div class="demo-step-title">Drop in any source.</div>
+        <div class="demo-step-desc">Slack export, runbook PDF, whiteboard photo, meeting transcript, ticket dump. No connectors required for the demo — paste it and go.</div>
+      </div>
+      <div class="demo-badge">INGEST.TS</div>
+    </div>
+    <div class="demo-step">
+      <div class="demo-step-icon" style="background:rgba(167,139,250,0.12);">🕸️</div>
+      <div class="demo-step-body">
+        <div class="demo-step-label">Step 02</div>
+        <div class="demo-step-title">Watch the graph populate live.</div>
+        <div class="demo-step-desc">Nodes for Alice, Bob, billing-svc, Stripe. Edges for owns, depends-on, governed-by. Multimodal extraction means a diagram becomes graph edges.</div>
+      </div>
+      <div class="demo-badge">GRAPH.LIVE</div>
+    </div>
+    <div class="demo-step">
+      <div class="demo-step-icon" style="background:rgba(163,230,53,0.12);">🔄</div>
+      <div class="demo-step-body">
+        <div class="demo-step-label">Step 03</div>
+        <div class="demo-step-title">Reconcile in real time.</div>
+        <div class="demo-step-desc">"Bob is now on call for billing." The graph updates; the old "Alice owns billing" fact is marked superseded — visible as a strikethrough. RAG would silently keep both.</div>
+      </div>
+      <div class="demo-badge">RECONCILE</div>
+    </div>
+    <div class="demo-step">
+      <div class="demo-step-icon" style="background:rgba(244,114,182,0.12);">💬</div>
+      <div class="demo-step-body">
+        <div class="demo-step-label">Step 04</div>
+        <div class="demo-step-title">Ask anything, grounded.</div>
+        <div class="demo-step-desc">"Who owns the billing service and what does it depend on?" Hybrid retrieval, one-hop graph walk, grounded answer with source citations and a confidence score.</div>
+      </div>
+      <div class="demo-badge">ASK.BRAIN</div>
+    </div>
+    <div class="demo-step">
+      <div class="demo-step-icon" style="background:rgba(251,191,36,0.12);">📄</div>
+      <div class="demo-step-body">
+        <div class="demo-step-label">Step 05</div>
+        <div class="demo-step-title">Export → SKILLS.md.</div>
+        <div class="demo-step-desc">Drop it into a Claude Code session. Ask Claude to open a PR. It now knows who to tag, what runbook to follow, and which gotchas to avoid.</div>
+      </div>
+      <div class="demo-badge">SKILLS.MD</div>
+    </div>
+  </div>
+</section>
+
+<!-- SKILLS OUTPUT -->
+<section id="output">
+  <span class="section-label">· The Output</span>
+  <h2 class="display">Compiles to <em>SKILLS.md.</em></h2>
+
+  <div class="skills-layout">
+    <div class="skills-left">
+      <p class="section-sub">Drop it into Claude Code, ChatGPT, Cursor. The brain isn't for humans. It's loaded by Claude before it writes a PR.</p>
+      <div class="pill-tags">
+        <span class="pill-tag"><span class="pill-dot" style="background:var(--accent)"></span>Claude Skills</span>
+        <span class="pill-tag"><span class="pill-dot" style="background:var(--cyan)"></span>Custom GPTs</span>
+        <span class="pill-tag"><span class="pill-dot" style="background:var(--violet)"></span>Cursor rules</span>
+        <span class="pill-tag"><span class="pill-dot" style="background:var(--lime)"></span>Aider conventions</span>
+        <span class="pill-tag"><span class="pill-dot" style="background:var(--muted-fg)"></span>MCP server</span>
+      </div>
+      <p class="skills-note">The skills-file format becomes a standard the way <strong>package.json</strong> did.</p>
+    </div>
+
+    <div class="skills-terminal">
+      <div class="skills-terminal-header">
+        <div class="skills-file-info">
+          <span>📄</span>
+          <span class="fname">SKILLS.md</span>
+          <span class="fmeta">2.1 KB · agent-loadable</span>
+        </div>
+        <span class="skills-synced">⚙ auto-synced</span>
+      </div>
+      <div class="skills-body">
+        <div><span class="sk-h1"># SKILLS.md</span></div>
+        <div><span class="sk-dim"># auto-generated by brainos · 2026-05-09 · scope: Operations</span></div>
+        <div>&nbsp;</div>
+        <div><span class="sk-h2">## Company: Helix Outdoor</span></div>
+        <div>&nbsp;</div>
+        <div><span class="sk-h3">### Ownership &amp; routing</span></div>
+        <div>- saigon_texco → owner: <span class="sk-bold">Marco Ferraro</span> (acting, conf 0.91)</div>
+        <div>- defective_lot_24-A-118 → owner: <span class="sk-bold">CX team</span></div>
+        <div>- shipbob_webhook → owner: <span class="sk-bold">Platform / Integrations</span></div>
+        <div>&nbsp;</div>
+        <div><span class="sk-h3">### Active policies</span></div>
+        <div>- CX Lead refund cap = <span class="sk-bold">$1,000</span> (eff 2026-05-01)</div>
+        <div>&nbsp; <span class="sk-dim">↳ supersedes: $2,000 cap (Apr 2026 → 2026-05-01) [HISTORICAL]</span></div>
+        <div>- Lot 24-A-118: DO NOT restock; full refund.</div>
+        <div>&nbsp;</div>
+        <div><span class="sk-h3">### Gotchas</span></div>
+        <div>- <span class="sk-warn">△ ShipBob webhook MISSES X-Shipbob-Signature on retries</span></div>
+        <div>&nbsp; <span class="sk-ok">→ MUST 400 if header absent. (incident #4471, conf 0.97)</span></div>
+        <div>- △ Saigon TexCo SLA renegotiation pending — escalate to Marco.</div>
+        <div>&nbsp;</div>
+        <div><span class="sk-h3">### Decisions &amp; temporal notes</span></div>
+        <div>- DEC-0042 · 2024 · selected Stripe over Adyen for EU SCA...</div>
+      </div>
+      <div class="skills-terminal-footer">
+        <span class="left">Helix Outdoor · 62 facts · 101 entities · 62 edges</span>
+        <span class="right">groundedness 0.96</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- WHY NOT RAG -->
+<section id="why-not-rag">
+  <span class="section-label">· Why This Isn't RAG</span>
+  <h2 class="display">Every existing tool optimizes <em>for retrieval.</em><br>None of them produce a <span class="lime">structured map</span> of how the company works.</h2>
+
+  <div class="rag-table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>CAPABILITY</th>
+          <th><span class="th-name">Glean</span><span class="th-sub">Enterprise Search</span></th>
+          <th><span class="th-name">Notion AI</span><span class="th-sub">Single-Source</span></th>
+          <th><span class="th-name">Copilot</span><span class="th-sub">M365-Native</span></th>
+          <th class="brainos-col"><span class="th-name">BrainOS</span><span class="th-sub">The New Layer</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Reconciliation / supersession</td><td><span class="cross">✕</span></td><td><span class="cross">✕</span></td><td><span class="cross">✕</span></td><td><span class="check">✓</span></td></tr>
+        <tr><td>Directed knowledge graph</td><td><span class="cross">✕</span></td><td><span class="cross">✕</span></td><td><span class="cross">✕</span></td><td><span class="check">✓</span></td></tr>
+        <tr><td>Conflict surfacing (Disputed)</td><td><span class="cross">✕</span></td><td><span class="cross">✕</span></td><td><span class="cross">✕</span></td><td><span class="check">✓</span></td></tr>
+        <tr><td>Knowledge gap detection</td><td><span class="cross">✕</span></td><td><span class="cross">✕</span></td><td><span class="cross">✕</span></td><td><span class="check">✓</span></td></tr>
+        <tr><td>VLM multimodal ingestion</td><td><span class="cross">✕</span></td><td><span class="cross">✕</span></td><td><span class="dash">—</span></td><td><span class="check">✓</span></td></tr>
+        <tr><td>Temporal queries (point-in-time)</td><td><span class="cross">✕</span></td><td><span class="cross">✕</span></td><td><span class="cross">✕</span></td><td><span class="check">✓</span></td></tr>
+        <tr><td>Agent-loadable SKILLS.md</td><td><span class="cross">✕</span></td><td><span class="cross">✕</span></td><td><span class="cross">✕</span></td><td><span class="check">✓</span></td></tr>
+        <tr><td>Self-hostable / open source</td><td><span class="cross">✕</span></td><td><span class="cross">✕</span></td><td><span class="cross">✕</span></td><td><span class="check">✓</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="rag-example">
+    Ingest "CX Lead refund cap is $2,000" in April, then "refund cap is $1,000 (eff May 1)" — BrainOS supersedes the old fact and answers both "today" and "in April" correctly.
+    <em>Vanilla RAG silently keeps both and hallucinates a merge.</em>
+  </p>
+</section>
+
+<!-- STACK -->
+<section id="stack">
+  <span class="section-label">· Architecture · Technical Credibility</span>
+  <h2 class="display">Open source. Swappable. <em>Self-hostable.</em></h2>
+  <p class="section-sub">Every layer is replaceable. Run the brain on your own infrastructure — no vendor lock-in.</p>
+
+  <div class="stack-grid">
+    <div class="stack-card">
+      <div class="stack-layer-label">Layer 01</div>
+      <div class="stack-card-header">
+        <div class="stack-icon" style="background:rgba(34,211,238,0.12);">🗂️</div>
+        <h3>Frontend</h3>
+      </div>
+      <ul class="stack-bullets">
+        <li>Next.js 16 · App Router · React Server Components</li>
+        <li>mtime-aware caching reflects external writes without restart</li>
+      </ul>
+    </div>
+    <div class="stack-card">
+      <div class="stack-layer-label">Layer 02</div>
+      <div class="stack-card-header">
+        <div class="stack-icon" style="background:rgba(167,139,250,0.12);">⚙️</div>
+        <h3>Backend</h3>
+      </div>
+      <ul class="stack-bullets">
+        <li>FastAPI multi-agent orchestrator</li>
+        <li>4 specialized agents · async pipelines · graceful shutdown</li>
+      </ul>
+    </div>
+    <div class="stack-card">
+      <div class="stack-layer-label">Layer 03</div>
+      <div class="stack-card-header">
+        <div class="stack-icon" style="background:rgba(244,114,182,0.12);">🔮</div>
+        <h3>Inference</h3>
+      </div>
+      <ul class="stack-bullets">
+        <li>vLLM · Qwen 32B + Qwen2-VL 7B + embeddings, co-resident</li>
+        <li>AMD MI300X · 192 GB HBM3 · 1 GPU vs 3× H100 · &lt;2s answer latency</li>
+      </ul>
+    </div>
+    <div class="stack-card">
+      <div class="stack-layer-label">Layer 04</div>
+      <div class="stack-card-header">
+        <div class="stack-icon" style="background:rgba(163,230,53,0.12);">⚡</div>
+        <h3>Retrieval</h3>
+      </div>
+      <ul class="stack-bullets">
+        <li>5-signal hybrid: vector + BM25 + entity + graph + multimodal (VLM)</li>
+        <li>Reciprocal rank fusion · temporal rerank · one-hop graph walk · stale filter</li>
+      </ul>
+    </div>
+    <div class="stack-card">
+      <div class="stack-layer-label">Layer 05</div>
+      <div class="stack-card-header">
+        <div class="stack-icon" style="background:rgba(251,191,36,0.12);">🗄️</div>
+        <h3>Storage</h3>
+      </div>
+      <ul class="stack-bullets">
+        <li>ChromaDB (HNSW cosine) for embeddings</li>
+        <li>brain.json — Git-friendly graph · diff your knowledge in PRs</li>
+      </ul>
+    </div>
+    <div class="stack-card">
+      <div class="stack-layer-label">Layer 06</div>
+      <div class="stack-card-header">
+        <div class="stack-icon" style="background:rgba(255,87,34,0.12);">{}</div>
+        <h3>Outputs</h3>
+      </div>
+      <ul class="stack-bullets">
+        <li>REST API · Slack adapter (HMAC-verified) · /metrics Prometheus scrape</li>
+        <li>SKILLS.md per department — drop into Claude Code, Cursor, GPTs, Aider</li>
+      </ul>
+    </div>
+  </div>
+
+  <div style="text-align:center;margin-top:16px;">
+    <span class="live-badge">⚡ LIVE IN V1 · SHIPPED AT THE HACKATHON</span>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section id="features">
+  <span class="section-label">· Capabilities</span>
+  <h2 class="display" style="margin-bottom:36px;">What makes it different.</h2>
+  <div class="features-strip">
+    <div class="feature-card">
+      <span class="feature-arrow">↗</span>
+      <h3>Conflict surfacing</h3>
+      <p>Two sources disagree → both kept with a Disputed badge. The argument surfaces; nothing is silently averaged.</p>
+    </div>
+    <div class="feature-card">
+      <span class="feature-arrow">↗</span>
+      <h3>Temporal queries</h3>
+      <p>"Refund cap today?" $1,000. "Refund cap in April?" $2,000. Old policy marked [SUPERSEDED] — both answers correct.</p>
+    </div>
+    <div class="feature-card">
+      <span class="feature-arrow">↗</span>
+      <h3>Slack-native ingest</h3>
+      <p>/ask, /ingest-channel, /ingest-thread. HMAC signature verification on every request. Grounded answers in-thread.</p>
+    </div>
+    <div class="feature-card">
+      <span class="feature-arrow">↗</span>
+      <h3>Multimodal VLM</h3>
+      <p>Qwen2-VL 7B reads architecture diagrams, whiteboard photos, org charts. Fuses with text in the same graph.</p>
+    </div>
+    <div class="feature-card">
+      <span class="feature-arrow">↗</span>
+      <h3>Gap detection</h3>
+      <p>Pure graph topology scan: missing_owner · undescribed_entity · orphan_gotcha · open_dispute. Deterministic — no LLM call.</p>
+    </div>
+  </div>
+</section>
+
+<!-- CLOSING CTA -->
+<section id="closing">
+  <div class="closing-card">
+    <span class="closing-badge">· AMD Hackathon 2026 · Track 1 + 3 · Live</span>
+    <h2>Five minutes from a cold codebase<br>to an agent that knows the<br><em>company.</em></h2>
+    <p class="section-sub">Built on AMD MI300X · Qwen 32B + Qwen2-VL 7B co-resident. Knowledge graph, supersession, gap detection, multimodal ingestion, Slack-native — all live today.</p>
+    <div class="closing-btns">
+      <a href="http://129.212.176.117:3000" target="_blank" class="btn-accent">Live demo · 129.212.176.117:3000 ↗</a>
+      <a href="https://github.com/vamshinr/BrainOS" target="_blank" class="btn-secondary">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        github.com/vamshinr/BrainOS
+      </a>
+    </div>
+    <p class="closing-attrs">Open Source · Self-Hostable · Vendor-Neutral · Noel · Rajveer · Vamshi</p>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-inner">
+    <div>
+      <div class="nav-logo" style="margin-bottom:0;">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 2L21.5 7.5V16.5L12 22L2.5 16.5V7.5L12 2Z" stroke="#ff5722" stroke-width="1.5" fill="none"/><circle cx="12" cy="12" r="3" fill="#ff5722"/></svg>
+        <span class="nav-wordmark">brain<span>os</span></span>
+      </div>
+      <p class="footer-brand-desc">The layer between scattered company knowledge and AI agents. Open-source core. Self-hostable. Built on AMD MI300X for the agent era.</p>
+      <span class="footer-hackathon">AMD Hackathon 2026 · Track 1 + 3</span>
+    </div>
+    <div class="footer-col">
+      <h4>Product</h4>
+      <a href="#how-it-works">How it works</a>
+      <a href="#agents">Agents</a>
+      <a href="#stack">Architecture</a>
+      <a href="#why-not-rag">Why not RAG</a>
+    </div>
+    <div class="footer-col">
+      <h4>Resources</h4>
+      <a href="http://129.212.176.117:3000" target="_blank">Live demo</a>
+      <a href="https://github.com/vamshinr/BrainOS" target="_blank">GitHub</a>
+      <a href="#">Skills format</a>
+    </div>
+    <div class="footer-col">
+      <h4>Team</h4>
+      <a href="#">Noel</a>
+      <a href="#">Rajveer</a>
+      <a href="#">Vamshi</a>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span>© 2026 BrainOS · Noel · Rajveer · Vamshi · open source.</span>
+    <span>RUNNING ON AMD MI300X · 192 GB HBM3</span>
+  </div>
+</footer>
+
+<script>
+// ── Section fade-in observer ──
+const sections = document.querySelectorAll('section');
+const fadeObs = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
+}, { threshold: 0.08 });
+sections.forEach(s => fadeObs.observe(s));
+
+// ── Progress bar animation ──
+const barObs = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      e.target.querySelectorAll('.progress-fill').forEach(bar => {
+        bar.style.width = bar.dataset.width + '%';
+      });
+    }
+  });
+}, { threshold: 0.3 });
+document.querySelectorAll('#problem').forEach(s => barObs.observe(s));
+
+// ── Graph canvas — animated node-by-node build ──
+const canvas = document.getElementById('graph-canvas');
+const ctx = canvas ? canvas.getContext('2d') : null;
+let activeStep = 0;
+let rafId = null;
+
+// Each step reveals exactly these node counts: step 0→1 node, step 1→3, step 2→5, step 3→6, step 4→8
+const stepNodeCount = [1, 3, 5, 6, 8];
+
+const nodes = [
+  // Step 0 — Ingest: source node appears
+  { x: 0.5,  y: 0.18, r: 26, color: '#ff5722', label: 'brain.json', ring: 'rgba(255,87,34,0.15)',    glyph: '⬡' },
+  // Step 1 — Extract: two source documents appear
+  { x: 0.22, y: 0.42, r: 19, color: '#22d3ee', label: 'Slack',      ring: 'rgba(34,211,238,0.13)',   glyph: '💬' },
+  { x: 0.78, y: 0.38, r: 16, color: '#a78bfa', label: 'PDF',        ring: 'rgba(167,139,250,0.13)',  glyph: '📄' },
+  // Step 2 — Map: entity + fact nodes appear
+  { x: 0.32, y: 0.68, r: 21, color: '#f472b6', label: 'entity',     ring: 'rgba(244,114,182,0.13)',  glyph: '◉' },
+  { x: 0.68, y: 0.70, r: 17, color: '#22d3ee', label: 'fact',       ring: 'rgba(34,211,238,0.13)',   glyph: '≡' },
+  // Step 3 — Reconcile: edge node (superseded link)
+  { x: 0.14, y: 0.80, r: 12, color: '#a1a1aa', label: 'superseded', ring: 'rgba(161,161,170,0.10)',  glyph: '✕' },
+  // Step 4 — Ground: owner + graph sink
+  { x: 0.86, y: 0.78, r: 14, color: '#fbbf24', label: 'owner',      ring: 'rgba(251,191,36,0.13)',   glyph: '★' },
+  { x: 0.5,  y: 0.90, r: 19, color: '#34d399', label: 'graph',      ring: 'rgba(52,211,153,0.13)',   glyph: '◈' },
+];
+
+// Edges: [from, to, color]
+const edgeDefs = [
+  [0, 1, 'rgba(34,211,238,0.25)'],
+  [0, 2, 'rgba(167,139,250,0.25)'],
+  [1, 3, 'rgba(244,114,182,0.20)'],
+  [2, 4, 'rgba(34,211,238,0.20)'],
+  [3, 4, 'rgba(255,255,255,0.12)'],
+  [3, 5, 'rgba(161,161,170,0.20)'],
+  [4, 6, 'rgba(251,191,36,0.20)'],
+  [5, 7, 'rgba(52,211,153,0.20)'],
+  [6, 7, 'rgba(52,211,153,0.20)'],
+  [0, 4, 'rgba(255,87,34,0.15)'],
+];
+
+// Per-node animation state: scale 0→1, alpha 0→1
+const nodeAnim = nodes.map(() => ({ scale: 0, alpha: 0 }));
+let targetCount = stepNodeCount[0];
+
+function resizeCanvas() {
+  if (!canvas) return;
+  const wrap = canvas.parentElement;
+  canvas.width = wrap.clientWidth;
+  canvas.height = wrap.clientHeight;
+}
+
+function drawFrame() {
+  if (!ctx || !canvas) return;
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Tick animations toward target
+  let needsMore = false;
+  for (let i = 0; i < targetCount; i++) {
+    const a = nodeAnim[i];
+    if (a.scale < 1) { a.scale = Math.min(1, a.scale + 0.07); needsMore = true; }
+    if (a.alpha < 1) { a.alpha = Math.min(1, a.alpha + 0.06); needsMore = true; }
+  }
+
+  // Draw edges (only between fully visible nodes)
+  edgeDefs.forEach(([a, b, col]) => {
+    if (a >= targetCount || b >= targetCount) return;
+    const alphaA = nodeAnim[a].alpha, alphaB = nodeAnim[b].alpha;
+    const edgeAlpha = Math.min(alphaA, alphaB);
+    if (edgeAlpha <= 0) return;
+    const na = nodes[a], nb = nodes[b];
+    // Animated dash-draw: progress = min of both node scales
+    const progress = Math.min(nodeAnim[a].scale, nodeAnim[b].scale);
+    const x1 = na.x * W, y1 = na.y * H;
+    const x2 = nb.x * W, y2 = nb.y * H;
+    const len = Math.hypot(x2 - x1, y2 - y1);
+    ctx.save();
+    ctx.globalAlpha = edgeAlpha * 0.9;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x1 + (x2 - x1) * progress, y1 + (y2 - y1) * progress);
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    // Arrowhead at end
+    if (progress > 0.85) {
+      const angle = Math.atan2(y2 - y1, x2 - x1);
+      const ex = x1 + (x2 - x1) * progress;
+      const ey = y1 + (y2 - y1) * progress;
+      ctx.beginPath();
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - 8 * Math.cos(angle - 0.4), ey - 8 * Math.sin(angle - 0.4));
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - 8 * Math.cos(angle + 0.4), ey - 8 * Math.sin(angle + 0.4));
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+    ctx.restore();
+    void len; // suppress unused warning
+  });
+
+  // Draw nodes
+  nodes.slice(0, targetCount).forEach((n, i) => {
+    const a = nodeAnim[i];
+    if (a.alpha <= 0) return;
+    const x = n.x * W, y = n.y * H;
+    const sc = a.scale;
+    ctx.save();
+    ctx.globalAlpha = a.alpha;
+    ctx.translate(x, y);
+    ctx.scale(sc, sc);
+    ctx.translate(-x, -y);
+
+    // Outer glow ring
+    ctx.beginPath();
+    ctx.arc(x, y, n.r + 12, 0, Math.PI * 2);
+    ctx.fillStyle = n.ring;
+    ctx.fill();
+
+    // Node body
+    ctx.beginPath();
+    ctx.arc(x, y, n.r, 0, Math.PI * 2);
+    ctx.fillStyle = n.color;
+    ctx.globalAlpha = a.alpha * 0.9;
+    ctx.fill();
+
+    // Inner pulse ring (only on active/latest node)
+    if (i === targetCount - 1 && sc >= 1) {
+      ctx.beginPath();
+      ctx.arc(x, y, n.r + 4, 0, Math.PI * 2);
+      ctx.strokeStyle = n.color;
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.35;
+      ctx.stroke();
+    }
+
+    ctx.restore();
+    ctx.save();
+    ctx.globalAlpha = a.alpha * 0.6;
+
+    // Label
+    ctx.fillStyle = '#fafafa';
+    ctx.font = "10px 'Geist Mono', monospace";
+    ctx.textAlign = 'center';
+    ctx.fillText(n.label, x, y + n.r + 17);
+    ctx.restore();
+  });
+
+  if (needsMore) rafId = requestAnimationFrame(drawFrame);
+  else rafId = null;
+}
+
+function animateTo(count) {
+  // Reset anim state for newly revealed nodes
+  for (let i = 0; i < count; i++) {
+    if (i >= targetCount) {
+      nodeAnim[i].scale = 0;
+      nodeAnim[i].alpha = 0;
+    }
+  }
+  targetCount = count;
+  if (!rafId) rafId = requestAnimationFrame(drawFrame);
+}
+
+if (canvas) {
+  resizeCanvas();
+  window.addEventListener('resize', () => {
+    resizeCanvas();
+    // Redraw immediately without re-animating
+    if (!rafId) rafId = requestAnimationFrame(drawFrame);
+  });
+  // Start with step 0: just the central node
+  animateTo(stepNodeCount[0]);
+}
+
+// ── Step scroll activation ──
+const stepItems = document.querySelectorAll('.step-item');
+
+function activateStep(idx) {
+  if (idx === activeStep) return;
+  activeStep = idx;
+  stepItems.forEach((s, i) => s.classList.toggle('active', i === idx));
+  animateTo(stepNodeCount[idx]);
+}
+
+const stepObs = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      const idx = parseInt(e.target.dataset.step);
+      // Only advance forward (don't retract on scroll back)
+      if (idx > activeStep) activateStep(idx);
+      else if (idx < activeStep) activateStep(idx);
+    }
+  });
+}, { threshold: 0.55, rootMargin: '-15% 0px -15% 0px' });
+
+stepItems.forEach(s => stepObs.observe(s));
+stepItems.forEach(s => s.addEventListener('click', () => activateStep(parseInt(s.dataset.step))));
+
+// ── Agent tabs ──
+const agentData = [
+  {
+    header: 'AGENT · INGESTION',
+    bullets: ['Text, image, PDF, screenshot, recording.', 'VLM converts visual content to rich descriptions.', 'Text LLM extracts entities, atomic facts, and directed relationships.'],
+    termTitle: 'INGESTION.LOG',
+    termBody: `<div><span class="t-comment"># Slack thread → atomic units</span></div>
+<div><span class="t-dim">&gt; Alice: I'll handle billing now</span></div>
+<div><span class="t-dim">&gt; Bob: @alice owns billing-svc going forward</span></div>
+<div><span class="t-sep">────────────────────────────────</span></div>
+<div><span class="t-dim">extracted: 2 facts, 1 entity, 1 ownership edge</span></div>
+<div>• <span class="t-key">alice</span> → <span class="t-dim">owns</span> → <span class="t-val">billing-svc</span>     <span class="t-dim">(conf 0.94)</span></div>
+<div>• <span class="t-key">billing-svc.kind</span> = <span class="t-val">"system"</span>    <span class="t-dim">(conf 0.99)</span></div>`
+  },
+  {
+    header: 'AGENT · STRUCTURING',
+    bullets: ['Detects contradictions between ingested facts.', 'Applies temporal ordering — newer facts supersede older ones.', 'Marks stale units [SUPERSEDED] or [DISPUTED] in the graph.'],
+    termTitle: 'STRUCTURING.LOG',
+    termBody: `<div><span class="t-comment"># Conflict detected — refund cap</span></div>
+<div><span class="t-dim">unit_42: "CX Lead cap = $2,000" (Apr 2026)</span></div>
+<div><span class="t-dim">unit_89: "CX Lead cap = $1,000" (May 2026)</span></div>
+<div><span class="t-sep">────────────────────────────────</span></div>
+<div><span class="t-key">unit_42</span> → <span class="t-val">[SUPERSEDED]</span>   <span class="t-dim">by unit_89</span></div>
+<div><span class="t-key">unit_89</span> → <span class="t-val">ACTIVE</span>         <span class="t-dim">(conf 0.98)</span></div>`
+  },
+  {
+    header: 'AGENT · EXECUTION',
+    bullets: ['Receives queries via REST or Slack /ask command.', '5-signal hybrid retrieval: vector + BM25 + entity + graph + VLM.', 'Returns grounded answer with inline citations and confidence score.'],
+    termTitle: 'EXECUTION.LOG',
+    termBody: `<div><span class="t-comment"># Query: "Who owns billing?"</span></div>
+<div><span class="t-dim">signals: vector=0.91 bm25=0.87 entity=1.0</span></div>
+<div><span class="t-dim">graph_walk: billing-svc → alice (1-hop)</span></div>
+<div><span class="t-sep">────────────────────────────────</span></div>
+<div><span class="t-key">answer</span>: <span class="t-val">"Alice owns billing-svc"</span></div>
+<div><span class="t-key">source</span>: <span class="t-dim">unit_12 (conf 0.94) [F3]</span></div>`
+  },
+  {
+    header: 'AGENT · FEEDBACK',
+    bullets: ['Scores every answer against the source units it cited.', 'Flags groundedness below threshold for human review.', 'Feeds back confidence signals to improve future retrieval weights.'],
+    termTitle: 'FEEDBACK.LOG',
+    termBody: `<div><span class="t-comment"># Groundedness check — answer_77</span></div>
+<div><span class="t-dim">claim: "Alice owns billing-svc"</span></div>
+<div><span class="t-dim">source: unit_12 → match: exact</span></div>
+<div><span class="t-sep">────────────────────────────────</span></div>
+<div><span class="t-key">groundedness</span>: <span class="t-val">0.97</span>   <span class="t-dim">✓ PASS</span></div>
+<div><span class="t-key">hallucination_risk</span>: <span class="t-val">LOW</span></div>`
+  }
+];
+
+const agentCards = document.querySelectorAll('.agent-card');
+const detailHeader = document.getElementById('agent-detail-header');
+const detailBullets = document.getElementById('agent-bullets');
+const termTitle = document.getElementById('terminal-title');
+const termBody = document.getElementById('terminal-body');
+const agentDetail = document.getElementById('agent-detail');
+
+agentCards.forEach((card, i) => {
+  card.addEventListener('click', () => {
+    agentCards.forEach(c => c.classList.remove('active'));
+    card.classList.add('active');
+    agentDetail.style.opacity = '0';
+    setTimeout(() => {
+      const d = agentData[i];
+      detailHeader.textContent = d.header;
+      detailBullets.innerHTML = d.bullets.map(b => `<li>${b}</li>`).join('');
+      termTitle.textContent = d.termTitle;
+      termBody.innerHTML = d.termBody;
+      agentDetail.style.opacity = '1';
+    }, 180);
+  });
+});
+
+agentDetail.style.transition = 'opacity 0.2s ease';
+</script>
+</body>
+</html>

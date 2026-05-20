@@ -1,0 +1,67 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - src/python_backend/.env
+    environment:
+      - BRAIN_DATA_DIR=/data
+      - PORT=8081
+    volumes:
+      - brain_data:/data
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/api/brain"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    restart: unless-stopped
+    environment:
+      - BACKEND_URL=http://backend:8081
+      - NODE_ENV=production
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs
+      - certbot_webroot:/var/www/certbot
+    # On first boot, auto-generate a self-signed cert if ./certs is empty —
+    # so HTTPS works immediately on the raw IP. Replace with a real
+    # Let's Encrypt cert by running deploy/gcp/init-tls.sh once you point a
+    # domain at this VM.
+    command: >
+      sh -c "if [ ! -s /etc/nginx/certs/fullchain.pem ]; then
+        apk add --no-cache openssl >/dev/null &&
+        openssl req -x509 -nodes -newkey rsa:2048 -days 365
+          -keyout /etc/nginx/certs/privkey.pem
+          -out /etc/nginx/certs/fullchain.pem
+          -subj '/CN=brainos.local' &&
+        chmod 600 /etc/nginx/certs/privkey.pem;
+      fi &&
+      nginx -g 'daemon off;'"
+    depends_on:
+      - frontend
+      - backend
+
+volumes:
+  brain_data:
+  certbot_webroot:

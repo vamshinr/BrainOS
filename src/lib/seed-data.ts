@@ -16,7 +16,7 @@ export const SEED_SOURCES: SeedSource[] = [
     kind: "doc",
     title: "Server Deployment Runbook",
     content:
-      "When deploying the new vLLM container on the MI300X, ensure that HIP_VISIBLE_DEVICES is set to 0. The default port is 8081. If you encounter OOM errors, reduce the max_model_len to 4096.",
+      "When deploying the vLLM container, ensure the GPU device env var (HIP_VISIBLE_DEVICES or CUDA_VISIBLE_DEVICES) is set correctly. The default port is 8081. If you encounter OOM errors, reduce the max_model_len to 4096.",
   },
   {
     kind: "email",

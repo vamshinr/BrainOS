@@ -1,10 +1,11 @@
+import { BACKEND_URL } from "@/lib/backend";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
 export async function GET() {
   try {
-    const backendRes = await fetch("http://localhost:8081/api/slack/health", {
+    const backendRes = await fetch(`${BACKEND_URL}/api/slack/health`, {
       cache: "no-store",
     });
     if (!backendRes.ok) {

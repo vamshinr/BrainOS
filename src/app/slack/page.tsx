@@ -24,7 +24,18 @@ export default function SlackPage() {
   }
 
   useEffect(() => {
-    loadHealth().catch((e) => setHealth({ error: String(e) }));
+    let cancelled = false;
+    fetch("/api/slack/health", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!cancelled) setHealth(data);
+      })
+      .catch((e) => {
+        if (!cancelled) setHealth({ error: String(e) });
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function postJson(path: string, body: Record<string, unknown>) {
@@ -119,7 +130,7 @@ export default function SlackPage() {
   }
 
   return (
-    <div className="px-10 py-10 max-w-6xl">
+    <div className="px-4 sm:px-6 md:px-10 py-6 md:py-10 max-w-6xl">
       <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
         Slack MCP
       </div>
@@ -151,7 +162,11 @@ export default function SlackPage() {
         </pre>
       </section>
 
-      <div className="mt-6 grid grid-cols-2 gap-4">
+      <RealtimeDecisionAlerts health={health} />
+
+      <RecentSlackMessages />
+
+      <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
         <ControlCard title="Shared Slack Context">
           <LabeledInput label="Channel ID" value={channelId} onChange={setChannelId} placeholder="C1234567890" />
           <label className="block text-xs text-[var(--muted-foreground)]">
@@ -249,6 +264,97 @@ export default function SlackPage() {
   );
 }
 
+function RealtimeDecisionAlerts({ health }: { health: Result }) {
+  const realtime = stringList(health?.realtime_ingest_channels);
+  const alertChannels = stringList(health?.ceo_decision_alert_channels);
+  const channelMap = recordOfStrings(health?.channel_map);
+  const mapped = Object.entries(channelMap);
+
+  return (
+    <section className="mt-6 rounded-lg border bg-[var(--card)] p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="font-semibold">Realtime Decision Alerts</h2>
+          <p className="mt-1 max-w-2xl text-sm text-[var(--muted-foreground)]">
+            Slack message events in realtime ingest channels are queued into BrainOS. Channels also listed for CEO alerts can raise high-confidence decision popups.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2 text-[11px]">
+          <StatusPill active={Boolean(health?.realtime_ingest_enabled)} label="Realtime ingest" />
+          <StatusPill active={Boolean(health?.ceo_decision_alerts_enabled)} label="CEO alerts" />
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+        <ConfigList title="Realtime ingest" items={realtime} empty="Set SLACK_REALTIME_INGEST_CHANNELS" />
+        <ConfigList title="CEO alert channels" items={alertChannels} empty="Set SLACK_CEO_DECISION_ALERT_CHANNELS" />
+        <div className="rounded-md border bg-[var(--background)]/40 p-3">
+          <div className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)]">
+            Channel map
+          </div>
+          {mapped.length === 0 ? (
+            <p className="mt-2 text-xs text-[var(--muted-foreground)]">No mapped channels yet.</p>
+          ) : (
+            <ul className="mt-2 space-y-1.5 text-xs">
+              {mapped.slice(0, 6).map(([channel, dept]) => (
+                <li key={channel} className="flex items-center justify-between gap-3">
+                  <span className="font-mono truncate">{channel}</span>
+                  <span className="text-[var(--muted-foreground)]">{dept}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function StatusPill({ active, label }: { active: boolean; label: string }) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${
+      active
+        ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+        : "border-[var(--border)] bg-[var(--muted)] text-[var(--muted-foreground)]"
+    }`}>
+      <span className={`size-1.5 rounded-full ${active ? "bg-emerald-500" : "bg-zinc-400"}`} />
+      {label}
+    </span>
+  );
+}
+
+function ConfigList({ title, items, empty }: { title: string; items: string[]; empty: string }) {
+  return (
+    <div className="rounded-md border bg-[var(--background)]/40 p-3">
+      <div className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)]">
+        {title}
+      </div>
+      {items.length === 0 ? (
+        <p className="mt-2 text-xs text-[var(--muted-foreground)]">{empty}</p>
+      ) : (
+        <ul className="mt-2 space-y-1.5 text-xs">
+          {items.map((item) => (
+            <li key={item} className="font-mono">{item}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function recordOfStrings(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item === "string") out[key] = item;
+  }
+  return out;
+}
+
 function ControlCard({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="rounded-lg border bg-[var(--card)] p-4">
@@ -279,5 +385,199 @@ function LabeledInput({
         className="mt-1 w-full rounded-md border bg-transparent px-3 py-2 text-sm text-[var(--foreground)]"
       />
     </label>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Recent Slack messages — reads /api/state every 5s, filters slack sources,
+// parses the actual message body out of `content`, and renders the latest 10.
+// `content` shape produced by both the webhook handler and the web poller:
+//
+//   Slack Realtime: <channel> / <ts>\n\n
+//   channel: ...\n channel_id: ...\n thread_ts: ...\n department: ...\n\n
+//   <user_id> [<ts>]\n
+//   <message text>
+//
+// We split on "\n\n", take the last block, strip the "<user> [<ts>]" header.
+
+type SlackSource = {
+  id: string;
+  capturedAt?: string;
+  channelId?: string;
+  channelName?: string;
+  threadTs?: string;
+  department?: string;
+  content?: string;
+};
+
+type ParsedSlackMessage = {
+  id: string;
+  capturedAt: string;
+  channelId: string;
+  channelName: string;
+  department: string;
+  threadTs: string | null;
+  user: string;
+  text: string;
+};
+
+function parseSlackContent(s: SlackSource): ParsedSlackMessage {
+  const content = s.content || "";
+  const blocks = content.split("\n\n");
+  let user = "";
+  let text = content;
+  if (blocks.length >= 3) {
+    const last = blocks[blocks.length - 1];
+    const firstNl = last.indexOf("\n");
+    if (firstNl >= 0) {
+      const header = last.slice(0, firstNl);
+      // "U0B2LN61Z0B [1779088460.345389]"
+      user = header.split(" ")[0] || "";
+      text = last.slice(firstNl + 1).trim();
+    } else {
+      text = last.trim();
+    }
+  }
+  return {
+    id: s.id,
+    capturedAt: s.capturedAt || "",
+    channelId: s.channelId || "",
+    channelName: s.channelName || s.channelId || "",
+    department: s.department || "",
+    threadTs: s.threadTs || null,
+    user,
+    text,
+  };
+}
+
+function formatRelative(iso: string): string {
+  if (!iso) return "";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "just now";
+  const s = Math.round(ms / 1000);
+  if (s < 5) return "just now";
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return new Date(iso).toLocaleString();
+}
+
+function RecentSlackMessages() {
+  const [messages, setMessages] = useState<ParsedSlackMessage[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetch("/api/state", { cache: "no-store" });
+        const data = await res.json();
+        const slack: SlackSource[] = (data.sources || []).filter(
+          (s: { kind?: string }) => s.kind === "slack",
+        );
+        slack.sort((a, b) =>
+          (a.capturedAt || "") < (b.capturedAt || "") ? 1 : -1,
+        );
+        const parsed = slack.slice(0, 10).map(parseSlackContent);
+        if (!cancelled) {
+          setMessages(parsed);
+          setLoaded(true);
+          setError(null);
+        }
+      } catch (e) {
+        if (!cancelled) setError(String(e));
+      }
+    };
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  const freshCount = messages.filter((m) => {
+    const ms = Date.now() - new Date(m.capturedAt).getTime();
+    return Number.isFinite(ms) && ms < 30_000;
+  }).length;
+
+  return (
+    <section className="mt-6 rounded-lg border bg-[var(--card)] p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span
+            className={`size-1.5 rounded-full ${
+              freshCount > 0
+                ? "bg-emerald-500 animate-pulse"
+                : "bg-zinc-400"
+            }`}
+            aria-hidden
+          />
+          <h2 className="font-semibold">Recent Slack messages</h2>
+          {freshCount > 0 && (
+            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+              {freshCount} new
+            </span>
+          )}
+        </div>
+        <span className="text-[11px] text-[var(--muted-foreground)]">
+          Polled every 5s · showing latest {messages.length}
+        </span>
+      </div>
+
+      <div className="mt-3">
+        {!loaded ? (
+          <p className="text-sm text-[var(--muted-foreground)]">Loading…</p>
+        ) : error ? (
+          <p className="text-sm text-red-600">Failed to load: {error}</p>
+        ) : messages.length === 0 ? (
+          <p className="text-sm text-[var(--muted-foreground)]">
+            No Slack messages ingested yet. Post something in a mapped channel
+            and it will appear here within 5 seconds.
+          </p>
+        ) : (
+          <ul className="divide-y divide-[var(--border)]">
+            {messages.map((m) => {
+              const fresh = (() => {
+                const ms = Date.now() - new Date(m.capturedAt).getTime();
+                return Number.isFinite(ms) && ms < 30_000;
+              })();
+              return (
+                <li key={m.id} className="py-3 first:pt-0 last:pb-0">
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--muted-foreground)]">
+                    <span className="font-mono">#{m.channelName || m.channelId}</span>
+                    {m.department && (
+                      <>
+                        <span aria-hidden>·</span>
+                        <span>{m.department}</span>
+                      </>
+                    )}
+                    {m.user && (
+                      <>
+                        <span aria-hidden>·</span>
+                        <span className="font-mono">{m.user}</span>
+                      </>
+                    )}
+                    <span aria-hidden>·</span>
+                    <span>{formatRelative(m.capturedAt)}</span>
+                    {fresh && (
+                      <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                        new
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 whitespace-pre-wrap text-sm leading-snug">
+                    {m.text}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }

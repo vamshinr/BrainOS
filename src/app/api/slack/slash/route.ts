@@ -1,3 +1,4 @@
+import { BACKEND_URL } from "@/lib/backend";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -7,7 +8,7 @@ export async function POST(req: Request) {
   const body = await req.text();
 
   try {
-    const backendRes = await fetch("http://localhost:8081/api/slack/slash", {
+    const backendRes = await fetch(`${BACKEND_URL}/api/slack/slash`, {
       method: "POST",
       headers: {
         "Content-Type": req.headers.get("content-type") ?? "application/x-www-form-urlencoded",

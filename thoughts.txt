@@ -1,0 +1,8 @@
+long memory pollutes context. solution is atomic facts + reconcile + skills
+Domain knowledge is the new bottleneck, not the model
+chunked rag silently halucinates. Atomic units is exactly what the literature says is right
+"context pollution," not "no memory." Reframe accordingly: not "wegive your agent memory"
+#1 (agent memory) fused with #3 (atomic facts > chunks)
+ ▎ "Stop stuffing your agent's prompt with noisy RAG chunks. BrainOS extracts atomic facts from Slack/email/tickets, 
+  ▎ reconciles them when they change, and exports a Skills file your Claude agent loads as memory — with provenance on 
+  ▎ every fact."

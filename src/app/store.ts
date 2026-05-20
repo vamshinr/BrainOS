@@ -21,7 +21,7 @@ export interface Source {
 export interface State {
   units: Unit[];
   sources: Source[];
-  entities: any[];
+  entities: unknown[];
 }
 
 export async function readState(): Promise<State> {

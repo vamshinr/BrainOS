@@ -1,3 +1,4 @@
+import { BACKEND_URL } from "@/lib/backend";
 import { NextResponse } from "next/server";
 import { readState, clearAll, deleteUnit, invalidateCache } from "@/lib/store";
 
@@ -15,7 +16,7 @@ export async function DELETE(req: Request) {
   if (unitId) {
     // Remove from ChromaDB first so the vector doesn't linger in semantic search
     try {
-      await fetch(`http://localhost:8081/api/units/${encodeURIComponent(unitId)}`, {
+      await fetch(`${BACKEND_URL}/api/units/${encodeURIComponent(unitId)}`, {
         method: "DELETE",
       });
     } catch {
@@ -29,7 +30,7 @@ export async function DELETE(req: Request) {
   if (url.searchParams.get("all") === "true") {
     // Clear Python backend first — wipes ChromaDB collection and brain.json
     try {
-      const backendRes = await fetch("http://localhost:8081/api/clear", {
+      const backendRes = await fetch(`${BACKEND_URL}/api/clear`, {
         method: "DELETE",
       });
       if (!backendRes.ok) {
