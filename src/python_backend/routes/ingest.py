@@ -30,7 +30,9 @@ class IngestRequest(BaseModel):
     title: Optional[str] = None
     content: str
     url: Optional[str] = None
-    model: Optional[str] = None  # per-request override for the extraction call
+    model: Optional[str] = None
+    valid_from: Optional[str] = None
+    valid_to: Optional[str] = None  # per-request override for the extraction call
 
 def _infer_unit_kind(text: str) -> str:
     lowered = text.lower()
@@ -134,7 +136,8 @@ def ingest_text(req: IngestRequest):
     job = job_queue.submit(
         kind="ingest_text", title=title, handler=_handler_ingest_text,
         payload={"kind": req.kind, "title": title, "content": req.content,
-                 "url": req.url, "model": req.model},
+                 "url": req.url, "model": req.model,
+                 "valid_from": req.valid_from, "valid_to": req.valid_to},
     )
     return {
         "job_id": job.id,
@@ -153,6 +156,8 @@ async def ingest_file(
     kind: str = Form("doc"),
     url: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
+    valid_from: Optional[str] = Form(None),
+    valid_to: Optional[str] = Form(None),
     file: UploadFile = File(...),
 ):
     """Enqueue a file ingest job. We read the bytes now (so the UploadFile
@@ -169,7 +174,8 @@ async def ingest_file(
     job = job_queue.submit(
         kind="ingest_file", title=title, handler=_handler_ingest_file,
         payload={"kind": kind, "title": title, "url": url, "model": model,
-                 "filename": filename, "data": data},
+                 "filename": filename, "data": data,
+                 "valid_from": valid_from, "valid_to": valid_to},
     )
     return {
         "job_id": job.id,
@@ -186,6 +192,8 @@ async def ingest_image(
     url: Optional[str] = Form(None),
     model: Optional[str] = Form(None),       # VLM model override
     text_model: Optional[str] = Form(None),  # extraction model override
+    valid_from: Optional[str] = Form(None),
+    valid_to: Optional[str] = Form(None),
     file: UploadFile = File(...),
 ):
     """Enqueue an image ingest job (VLM → extraction → store)."""

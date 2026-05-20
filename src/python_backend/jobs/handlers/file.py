@@ -56,6 +56,8 @@ def _handler_ingest_file(job: Job, q: JobQueue) -> dict:
         "uploadedFilename": filename, "charCount": len(text),
         "chunkCount": len(chunks),
         "extractionMode": "fallback" if used_fallback else "model",
+        "validFrom": p.get("valid_from") or None,
+        "validTo": p.get("valid_to") or None,
     }
     result = struct_agent.embed_and_store(
         source_id=source_id, source=source,

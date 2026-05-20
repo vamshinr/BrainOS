@@ -63,6 +63,10 @@ export default function IngestPage() {
   const [vlmModel, setVlmModel] = useState("");          // image → description
   const [imgTextModel, setImgTextModel] = useState("");  // post-VLM extraction
 
+  // Shared validity window — applies to all three ingest tabs
+  const [validFrom, setValidFrom] = useState("");
+  const [validTo, setValidTo] = useState("");
+
   function onImgChange(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0] ?? null;
     setImgFile(f);
@@ -130,6 +134,8 @@ export default function IngestPage() {
           title: title || undefined,
           url: url || undefined,
           model: textModel || undefined,
+          valid_from: validFrom || undefined,
+          valid_to: validTo || undefined,
         }),
       });
       const j = await res.json();
@@ -292,6 +298,46 @@ export default function IngestPage() {
             label="Extraction model (optional)"
             hint="overrides extraction agent"
           />
+
+
+          <div className="rounded-md border border-dashed border-[var(--border)] bg-[var(--muted)]/20 px-4 py-3 space-y-3">
+            <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
+              Validity window <span className="normal-case font-normal">(optional)</span>
+            </div>
+            <div className="flex flex-wrap gap-4 items-center">
+              <label className="flex items-center gap-2 text-sm">
+                <span className="text-[var(--muted-foreground)] w-16">Valid from</span>
+                <input
+                  type="date"
+                  value={validFrom}
+                  onChange={(e) => setValidFrom(e.target.value)}
+                  className="rounded border bg-[var(--card)] px-2 py-1 text-sm font-mono text-[var(--foreground)]"
+                />
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <span className="text-[var(--muted-foreground)] w-16">Valid to</span>
+                <input
+                  type="date"
+                  value={validTo}
+                  onChange={(e) => setValidTo(e.target.value)}
+                  min={validFrom || undefined}
+                  className="rounded border bg-[var(--card)] px-2 py-1 text-sm font-mono text-[var(--foreground)]"
+                />
+              </label>
+              {(validFrom || validTo) && (
+                <button
+                  type="button"
+                  onClick={() => { setValidFrom(""); setValidTo(""); }}
+                  className="text-[11px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] underline"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <p className="text-[11px] text-[var(--muted-foreground)]">
+              Sets when this knowledge is true. Retrieval boosts current facts and deprioritises expired ones.
+            </p>
+          </div>
 
           <SubmitRow loading={loading} disabled={!content} label="Extract knowledge" />
         </form>

@@ -27,6 +27,8 @@ def _handler_ingest_text(job: Job, q: JobQueue) -> dict:
     source = {
         "id": source_id, "kind": p["kind"], "title": p["title"],
         "content": p["content"], "url": p.get("url"), "capturedAt": now,
+        "validFrom": p.get("valid_from") or None,
+        "validTo": p.get("valid_to") or None,
     }
     result = struct_agent.embed_and_store(
         source_id=source_id, source=source,

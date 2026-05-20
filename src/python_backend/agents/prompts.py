@@ -97,17 +97,22 @@ E. RELATIONSHIP RULES:
 F. SKIP NON-DURABLE NOISE: greetings, scheduling, "lgtm", "+1", chitchat, jokes.
 
 G. TEMPORAL CUES: preserve time instead of flattening it.
-   - If the text says "as of", "effective", "starts", "until", "through",
+   - If the text contains "as of", "effective", "starts", "until", "through",
      "previously", "no longer", "deprecated by", "after", "before", or gives
      a quarter/month/date, emit the relevant temporal fields.
+   - Infer temporal_status from VERB TENSE even without explicit dates:
+       Past tense / "used to" / "formerly" / "was" / "had been" / "no longer" → historical
+       "will be" / "planned" / "going forward" / "starting from" / "upcoming" → future
+       Present tense with no other signal → current
    - Do NOT collapse future facts into current facts. Example:
        "Bob takes over billing-svc effective 2026-06-01"
        means Bob's ownership is future until that date.
    - Do NOT delete historical state. Example:
-       "Alice owns billing-svc until 2026-06-01" is a valid dated fact.
+       "We used to use Adyen but migrated to Stripe" → two units:
+         Adyen: temporal_status=historical | Stripe: temporal_status=current
    - Use ISO dates (YYYY-MM-DD) whenever the source provides enough information.
    - If the source says "next month" or "last Tuesday", infer from the source date
-     only when obvious; otherwise leave the date empty and set temporal_status unknown.
+     only when obvious; otherwise leave the date empty and infer status from verb tense.
 
 ==================================================================================
 OUTPUT FORMAT — JSON only, no markdown fences, no preamble

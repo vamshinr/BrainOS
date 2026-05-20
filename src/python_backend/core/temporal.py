@@ -26,6 +26,22 @@ def _today_utc() -> datetime.date:
     return datetime.datetime.now(datetime.timezone.utc).date()
 
 
+# Patterns that signal a fact is no longer current
+_HISTORICAL_RE = re.compile(
+    r"\b(used to|previously|formerly|was |were |had been|no longer|deprecated|"
+    r"replaced by|migrated from|switched from|moved away from|shut down|"
+    r"decommissioned|retired|ended|stopped|discontinued|as of .{0,30} ago)\b",
+    re.IGNORECASE,
+)
+# Patterns that signal a fact is not yet in effect
+_FUTURE_RE = re.compile(
+    r"\b(will be|going forward|starting from|effective from|planned|"
+    r"upcoming|scheduled|next quarter|next month|not yet|pending|"
+    r"to be deprecated|to be replaced)\b",
+    re.IGNORECASE,
+)
+
+
 def _infer_temporal_status(unit: dict, source: dict | None = None) -> str:
     today = _today_utc()
     status = str(unit.get("temporal_status") or unit.get("temporalStatus") or "").strip().lower()
@@ -43,21 +59,39 @@ def _infer_temporal_status(unit: dict, source: dict | None = None) -> str:
         return "future"
     if valid_from and valid_from > today:
         return "future"
-    if valid_to or valid_from or effective or observed:
+    if valid_to or valid_from or effective:
         return "current"
-    if source and _parse_date(source.get("capturedAt")):
-        return "unknown"
+
+    # No explicit dates — infer from statement language
+    stmt = unit.get("statement", "")
+    if _HISTORICAL_RE.search(stmt):
+        return "historical"
+    if _FUTURE_RE.search(stmt):
+        return "future"
+
+    # Fall back: if we have any observed signal, assume current
+    if observed:
+        return "current"
     return "unknown"
 
 
 def _temporal_fields(unit: dict, source: dict | None = None) -> dict:
+    # Prefer the unit's own observed_at, then the source's document_date (the
+    # original creation/publish date set by a connector — e.g. a Slack message
+    # sent 3 months ago, a PR merged last year), then the ingestion timestamp.
+    src_doc_date = _normalize_date(source.get("documentDate") if source else None)
     observed = (
         _normalize_date(unit.get("observed_at") or unit.get("observedAt"))
+        or src_doc_date
         or _normalize_date(source.get("capturedAt") if source else None)
     )
+    # Unit's own LLM-extracted dates take priority; fall back to source-level
+    # validity window (manual UI dates or connector metadata).
+    src_valid_from = _normalize_date(source.get("validFrom") if source else None)
+    src_valid_to   = _normalize_date(source.get("validTo") if source else None)
     fields = {
-        "validFrom": _normalize_date(unit.get("valid_from") or unit.get("validFrom")),
-        "validTo": _normalize_date(unit.get("valid_to") or unit.get("validTo")),
+        "validFrom": _normalize_date(unit.get("valid_from") or unit.get("validFrom")) or src_valid_from,
+        "validTo": _normalize_date(unit.get("valid_to") or unit.get("validTo")) or src_valid_to,
         "effectiveDate": _normalize_date(unit.get("effective_date") or unit.get("effectiveDate")),
         "observedAt": observed,
         "temporalStatus": _infer_temporal_status(unit, source),
