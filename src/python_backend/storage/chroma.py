@@ -41,10 +41,32 @@ chroma_client = chromadb.PersistentClient(
     path=CHROMA_PATH,
     settings=Settings(anonymized_telemetry=False, allow_reset=True),
 )
-collection = chroma_client.get_or_create_collection(
-    name="brainos_knowledge",
-    embedding_function=embedding_fn,
-    metadata={"hnsw:space": "cosine"},
+class _CollectionProxy:
+    """Stable proxy so `from storage.chroma import collection` survives a clear_all() reset.
+
+    After a reset, call collection._replace(new_col) and every module that holds
+    a reference to this proxy automatically delegates to the new collection —
+    without needing to re-import or restart.
+    """
+    def __init__(self, col):
+        object.__setattr__(self, "_col", col)
+
+    def _replace(self, new_col):
+        object.__setattr__(self, "_col", new_col)
+
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_col"), name)
+
+    def __repr__(self):
+        return repr(object.__getattribute__(self, "_col"))
+
+
+collection = _CollectionProxy(
+    chroma_client.get_or_create_collection(
+        name="brainos_knowledge",
+        embedding_function=embedding_fn,
+        metadata={"hnsw:space": "cosine"},
+    )
 )
 
 # ── Bootstrap indexes from persisted brain state ───────────────────────────────

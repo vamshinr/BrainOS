@@ -92,7 +92,6 @@ def clear_all():
     leaves the next operation hitting a schema-less DB ("no such table:
     collections"). Instead we use Chroma's own delete_collection() + reset()
     which clean up .bin files via the segment manager."""
-    global collection
     removed: list[str] = []
 
     # Snapshot the active collection's segment dirs BEFORE delete_collection so
@@ -126,10 +125,14 @@ def clear_all():
     # 3. Recreate the collection on the SAME client. Building a new
     # PersistentClient would hit chromadb's SharedSystemClient cache and
     # return a stale handle ("readonly database") — bad.
-    collection = chroma_client.get_or_create_collection(
-        name="brainos_knowledge",
-        embedding_function=embedding_fn,
-        metadata={"hnsw:space": "cosine"},
+    # _replace() updates the proxy so ALL modules that imported `collection`
+    # automatically delegate to the fresh collection — no stale-UUID errors.
+    collection._replace(
+        chroma_client.get_or_create_collection(
+            name="brainos_knowledge",
+            embedding_function=embedding_fn,
+            metadata={"hnsw:space": "cosine"},
+        )
     )
 
     # 4. Defensive: remove any UUID-shaped segment dirs that existed BEFORE
