@@ -1,8 +1,10 @@
 """StructuringAgent: embed units, reconcile, merge into brain.json."""
 from __future__ import annotations
+import os
 import uuid
 import datetime
 import time as _time_mod
+from concurrent.futures import ThreadPoolExecutor
 from clients.router import _resolve_text_override, router
 from storage.brain import _read_brain, _write_brain
 from storage.chroma import collection
@@ -276,8 +278,28 @@ class StructuringAgent:
 
         new_captured_at = source.get("capturedAt", now)
         _t_reconcile = _time_mod.time()
-        for uid, unit in pending:
-            rec = self._reconcile(unit, uid, source_id, new_captured_at)
+
+        # Reconcile is the per-unit bottleneck: each call is one LLM round-trip.
+        # Run them concurrently. Safe because:
+        #   - All units were upserted in step 2 before this loop starts
+        #   - _reconcile only reads from Chroma; filters out the unit's own id
+        #   - Aggregation into superseded_ids / stored_units / conflict_pairs
+        #     happens after the parallel section, in deterministic input order
+        max_workers = max(1, int(os.getenv("RECONCILE_MAX_WORKERS", "8") or 8))
+        workers = min(max_workers, len(pending)) if pending else 1
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                reconcile_results = list(ex.map(
+                    lambda item: self._reconcile(item[1], item[0], source_id, new_captured_at),
+                    pending,
+                ))
+        else:
+            reconcile_results = [
+                self._reconcile(unit, uid, source_id, new_captured_at)
+                for uid, unit in pending
+            ]
+
+        for (uid, unit), rec in zip(pending, reconcile_results):
             if rec["duplicate"]:
                 # Remove the just-upserted duplicate from ChromaDB
                 try:
