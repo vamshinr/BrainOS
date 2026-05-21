@@ -315,6 +315,72 @@ class ExecutionAgent:
             retrieved_chunk_ids.append(cid)
             retrieved_chunks.append(chunk)
 
+        # ── Recency injection ────────────────────────────────────────────────
+        # Keyword/vector retrieval can't answer "what's the latest?" or "what
+        # did people ask recently?" — those questions share no words with the
+        # content; the answer is simply whatever is newest. So when the query
+        # has recency intent, blend in the most-recently-observed units and
+        # the newest raw chunks (by their source's message/document date).
+        if temporal_intent.get("recency"):
+            sources_by_id = {s["id"]: s for s in brain.get("sources", []) if s.get("id")}
+
+            def _source_date(source_id: str | None) -> str:
+                src = sources_by_id.get(source_id or "", {})
+                return str(
+                    src.get("documentDate")
+                    or src.get("messageAt")
+                    or src.get("capturedAt")
+                    or ""
+                )
+
+            recent_units = sorted(
+                (u for u in searchable_units if not u.get("stale") and not u.get("supersededBy")),
+                key=lambda u: str(u.get("observedAt") or u.get("createdAt") or ""),
+                reverse=True,
+            )
+            seen_units = set(retrieved_ids)
+            for unit in recent_units:
+                if len(retrieved_ids) >= n_results + 6:
+                    break
+                uid = unit["id"]
+                if uid in seen_units:
+                    continue
+                seen_units.add(uid)
+                retrieved_ids.append(uid)
+                retrieved_docs.append(unit.get("statement", ""))
+                retrieved_metas.append({
+                    "kind": unit.get("kind", "fact"),
+                    "confidence": float(unit.get("confidence", 0.7)),
+                    "subject": unit.get("subject", ""),
+                    "sector": unit.get("sector", "General"),
+                    "department": unit.get("department", "general"),
+                    "entities": unit.get("entities", []),
+                    "disputed": unit.get("disputed", False),
+                    "stale": unit.get("stale", False),
+                    "supersededBy": unit.get("supersededBy"),
+                    "validFrom": unit.get("validFrom"),
+                    "validTo": unit.get("validTo"),
+                    "effectiveDate": unit.get("effectiveDate"),
+                    "observedAt": unit.get("observedAt"),
+                    "temporalStatus": unit.get("temporalStatus", "unknown"),
+                })
+
+            recent_chunks = sorted(
+                raw_chunks,
+                key=lambda c: _source_date(c.get("sourceId")),
+                reverse=True,
+            )
+            seen_chunks = set(retrieved_chunk_ids)
+            for chunk in recent_chunks:
+                if len(retrieved_chunk_ids) >= 6:
+                    break
+                cid = chunk["id"]
+                if cid in seen_chunks:
+                    continue
+                seen_chunks.add(cid)
+                retrieved_chunk_ids.append(cid)
+                retrieved_chunks.append(chunk)
+
         seen_rels: set[str] = set()
         for rel in graph_relationships[: max(3, n_results)]:
             rel_id = rel.get("id") or f"{rel.get('from')}:{rel.get('relation')}:{rel.get('to')}"

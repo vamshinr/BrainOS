@@ -116,8 +116,12 @@ def _recency_factor(unit: dict) -> float:
 
 def _detect_temporal_intent(query: str) -> dict:
     q = query.lower()
-    if re.search(r"\b(now|current|currently|today|latest|active|recent|recently|lately)\b", q):
-        return {"mode": "current", "target_date": _today_utc().isoformat()}
+    # Recency-browse queries ("what's the latest?", "asked recently?") want the
+    # newest knowledge regardless of keyword overlap. The flag tells the
+    # retriever to blend in the most-recently-observed units and chunks.
+    recency = bool(re.search(r"\b(recent|recently|lately|latest|newest)\b", q))
+    if recency or re.search(r"\b(now|current|currently|today|active)\b", q):
+        return {"mode": "current", "target_date": _today_utc().isoformat(), "recency": recency}
     if re.search(r"\b(after|from|starting|effective)\b", q):
         mode = "future"
     elif re.search(r"\b(before|previously|past|historical|history|old|q[1-4])\b", q):
@@ -140,7 +144,7 @@ def _detect_temporal_intent(query: str) -> dict:
             target_date = datetime.date(int(month_match.group(2)), month, 1).isoformat()
     if target_date and mode == "general":
         mode = "date"
-    return {"mode": mode, "target_date": target_date}
+    return {"mode": mode, "target_date": target_date, "recency": recency}
 
 
 def _unit_temporal_score(unit: dict, intent: dict) -> float:
