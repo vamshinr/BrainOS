@@ -42,6 +42,79 @@ _DEPT_TO_SECTOR: dict[str, str] = {
 }
 
 
+# Structured Outputs schema — sent to OpenAI/vLLM as response_format=json_schema
+# so the decoder is constrained to emit JSON that matches this exactly. Enum
+# values are derived from the _VALID_* sets above so they stay in sync.
+# `sector` is intentionally absent: the validator derives it from department.
+# Empty strings are allowed for optional-by-convention fields (subject,
+# evidence_quote, valid_from, etc.) so the model never has to invent content.
+_ENTITY_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["name", "kind", "aliases", "description", "evidence_quote"],
+    "properties": {
+        "name": {"type": "string"},
+        "kind": {"type": "string"},
+        "aliases": {"type": "array", "items": {"type": "string"}},
+        "description": {"type": "string"},
+        "evidence_quote": {"type": "string"},
+    },
+}
+
+_UNIT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "kind", "department", "subject", "statement", "entities",
+        "evidence_quote", "confidence", "temporal_status",
+        "valid_from", "valid_to", "effective_date", "observed_at",
+    ],
+    "properties": {
+        "kind": {"type": "string", "enum": sorted(_VALID_UNIT_KINDS)},
+        "department": {"type": "string", "enum": sorted(_VALID_DEPARTMENTS)},
+        "subject": {"type": "string"},
+        "statement": {"type": "string"},
+        "entities": {"type": "array", "items": {"type": "string"}},
+        "evidence_quote": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "temporal_status": {"type": "string", "enum": sorted(_VALID_TEMPORAL_STATUSES)},
+        "valid_from": {"type": "string"},
+        "valid_to": {"type": "string"},
+        "effective_date": {"type": "string"},
+        "observed_at": {"type": "string"},
+    },
+}
+
+_RELATIONSHIP_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["from", "relation", "to", "evidence_quote", "confidence", "temporal_status"],
+    "properties": {
+        "from": {"type": "string"},
+        "relation": {"type": "string"},
+        "to": {"type": "string"},
+        "evidence_quote": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "temporal_status": {"type": "string", "enum": sorted(_VALID_TEMPORAL_STATUSES)},
+    },
+}
+
+EXTRACTION_JSON_SCHEMA = {
+    "name": "ExtractionResult",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["entities", "units", "relationships"],
+        "properties": {
+            "entities": {"type": "array", "items": _ENTITY_SCHEMA},
+            "units": {"type": "array", "items": _UNIT_SCHEMA},
+            "relationships": {"type": "array", "items": _RELATIONSHIP_SCHEMA},
+        },
+    },
+}
+
+
 def _validate_extraction(data: dict) -> dict:
     """
     Validate and coerce the raw extraction dict into the expected schema.

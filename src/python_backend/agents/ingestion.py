@@ -5,7 +5,25 @@ import time
 from clients.router import _resolve_override, _resolve_text_override
 from core.logging import _debug_event, _log_call
 from agents.prompts import EXTRACTION_SYSTEM
-from agents.extraction import _parse_extraction_json, _validate_extraction
+from agents.extraction import (
+    _parse_extraction_json,
+    _validate_extraction,
+    EXTRACTION_JSON_SCHEMA,
+)
+
+
+def _supports_structured_outputs(client) -> bool:
+    """OpenAI and vLLM accept response_format=json_schema. Anthropic does not.
+    Detect by base URL — both clients expose it. Default to True so unknown
+    OpenAI-compatible endpoints get the constrained-decoding speedup; the
+    runtime fallback in _extract_chunk catches mismatches."""
+    try:
+        base = str(getattr(client, "base_url", "") or "").lower()
+    except Exception:
+        return True
+    if "anthropic" in base or "claude" in base:
+        return False
+    return True
 
 class IngestionAgent:
     """Reads raw content (text or image) and extracts structured knowledge via the LLM."""
@@ -24,6 +42,7 @@ class IngestionAgent:
             "Extract entities, knowledge units, and relationships per the system instructions."
         )
         client, model = _resolve_text_override("extraction", model_override)
+        use_schema = _supports_structured_outputs(client)
         t0 = time.time()
         _debug_event(
             "extract.chunk.start",
@@ -32,19 +51,55 @@ class IngestionAgent:
             title=title,
             model=model,
             chars=len(chunk),
+            output_mode="json_schema" if use_schema else "json_object",
         )
-        try:
-            response = client.chat.completions.create(
+
+        def _call(response_format: dict):
+            return client.chat.completions.create(
                 model=model,
                 messages=[
                     {"role": "system", "content": EXTRACTION_SYSTEM},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
-                # Enforces JSON output on OpenAI and vLLM; silently ignored by Claude
-                # (Claude follows the prompt instruction instead).
-                response_format={"type": "json_object"},
+                response_format=response_format,
             )
+
+        try:
+            try:
+                if use_schema:
+                    # Structured Outputs: decoder is constrained to our schema.
+                    # Eliminates malformed-JSON failures and is often modestly
+                    # faster (constrained decoding skips invalid token branches).
+                    response = _call({
+                        "type": "json_schema",
+                        "json_schema": EXTRACTION_JSON_SCHEMA,
+                    })
+                else:
+                    # Claude path: fall back to prompt-driven JSON (json_object
+                    # is silently ignored by Anthropic).
+                    response = _call({"type": "json_object"})
+            except Exception as schema_err:
+                # Catch endpoints that advertise OpenAI compatibility but
+                # don't implement json_schema (older vLLM builds, some proxies).
+                # Only retry when the failure is plausibly schema-related;
+                # otherwise re-raise so token-length / auth errors aren't masked.
+                msg = str(schema_err).lower()
+                schema_related = use_schema and (
+                    "json_schema" in msg
+                    or "response_format" in msg
+                    or "unsupported" in msg
+                    or "invalid_request_error" in msg
+                )
+                if not schema_related:
+                    raise
+                _debug_event(
+                    "extract.schema.fallback",
+                    "json_schema unsupported on this endpoint — retrying with json_object",
+                    model=model,
+                    error=str(schema_err)[:200],
+                )
+                response = _call({"type": "json_object"})
             latency_ms = int((time.time() - t0) * 1000)
             usage = getattr(response, "usage", None)
             _log_call(
