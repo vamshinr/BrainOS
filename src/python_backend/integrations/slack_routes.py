@@ -15,9 +15,11 @@ from slack_mcp.auth import load_slack_config
 from slack_mcp.bot import answer_for_slack
 from slack_mcp.canvas import export_canvas
 from slack_mcp.client import SlackMCPClient, SlackMCPError
+from slack_mcp.enrich import build_slack_document, resolve_channel_name, resolve_user_name
 from slack_mcp.ingest import ingest_slack_document
 from slack_mcp.normalizer import build_source_document
 from slack_mcp.schemas import SlackSourceDocument
+from slack_mcp.web_poller import _bot_token
 
 
 class SlackThreadIngestRequest(BaseModel):
@@ -485,7 +487,7 @@ def create_slack_router(
                 return stripped[len(prefix):].strip(" :-\t")
         return None
 
-    def _slack_event_document(
+    async def _slack_event_document(
         *,
         event: dict[str, Any],
         channel_id: str,
@@ -494,31 +496,23 @@ def create_slack_router(
     ) -> SlackSourceDocument:
         ts = str(event.get("ts") or "")
         thread_ts = str(event.get("thread_ts") or ts or "")
-        user = str(event.get("user") or "unknown")
-        channel_name = str(event.get("channel_name") or channel_id)
-        title = f"Slack Realtime: {channel_name}"
-        if thread_ts:
-            title = f"{title} / {thread_ts}"
-        lines = [
-            title,
-            "",
-            f"channel: {channel_name}",
-            f"channel_id: {channel_id}",
-            f"thread_ts: {thread_ts}",
-            f"department: {department}",
-            "",
-            f"{user} [{ts}]",
-            text,
-        ]
-        return SlackSourceDocument(
-            title=title,
-            content="\n".join(lines).strip(),
+        user_id = str(event.get("user") or "unknown")
+        token = _bot_token()
+        # Webhook events carry raw IDs; resolve them to human names so the
+        # stored source records who sent the message and in which channel.
+        channel_name = str(event.get("channel_name") or "") or await resolve_channel_name(
+            channel_id, token
+        )
+        user_name = await resolve_user_name(user_id, token)
+        return build_slack_document(
             channel_id=channel_id,
             channel_name=channel_name,
-            thread_ts=thread_ts or None,
+            user_id=user_id,
+            user_name=user_name,
+            ts=ts,
+            thread_ts=thread_ts,
             department=department,
-            message_count=1,
-            raw={"event_ts": ts, "event_type": event.get("type"), "user": user},
+            text=text,
         )
 
     @router.post("/events")
@@ -560,7 +554,7 @@ def create_slack_router(
         ):
             department = client.config.department_for_channel(channel_id)
             alert_enabled = channel_id in client.config.ceo_decision_alert_channels
-            doc = _slack_event_document(
+            doc = await _slack_event_document(
                 event=event,
                 channel_id=channel_id,
                 department=department,

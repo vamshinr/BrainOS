@@ -22,7 +22,7 @@ type Queued = {
   queuePosition: number;
 };
 
-type Tab = "text" | "file" | "image" | "code";
+type Tab = "text" | "file";
 
 export default function IngestPage() {
   const [tab, setTab] = useState<Tab>("text");
@@ -40,44 +40,16 @@ export default function IngestPage() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Image form state
-  const [imgKind, setImgKind] = useState<KindValue>("doc");
-  const [imgTitle, setImgTitle] = useState("");
-  const [imgUrl, setImgUrl] = useState("");
-  const [imgFile, setImgFile] = useState<File | null>(null);
-  const [imgPreview, setImgPreview] = useState<string | null>(null);
-  const imgInputRef = useRef<HTMLInputElement>(null);
-
-  // Code form state — a zip of a repo OR a single code/doc file
-  const [codeTitle, setCodeTitle] = useState("");
-  const [codeUrl, setCodeUrl] = useState("");
-  const [codeFile, setCodeFile] = useState<File | null>(null);
-  const codeInputRef = useRef<HTMLInputElement>(null);
-
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [queued, setQueued] = useState<Queued | null>(null);
 
-  // Optional per-request model overrides. Empty string = "Auto".
-  const [textModel, setTextModel] = useState("");        // text + file extraction
-  const [vlmModel, setVlmModel] = useState("");          // image → description
-  const [imgTextModel, setImgTextModel] = useState("");  // post-VLM extraction
+  // Optional per-request model override. Empty string = "Auto".
+  const [textModel, setTextModel] = useState(""); // text + file extraction
 
-  // Shared validity window — applies to all three ingest tabs
+  // Shared validity window — applies to both ingest tabs
   const [validFrom, setValidFrom] = useState("");
   const [validTo, setValidTo] = useState("");
-
-  function onImgChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0] ?? null;
-    setImgFile(f);
-    if (f) {
-      const reader = new FileReader();
-      reader.onload = (ev) => setImgPreview(ev.target?.result as string);
-      reader.readAsDataURL(f);
-    } else {
-      setImgPreview(null);
-    }
-  }
 
   // Read {job_id, title, queue_position} from the enqueue response and turn
   // it into our Queued shape. The actual processing happens asynchronously —
@@ -151,65 +123,6 @@ export default function IngestPage() {
     }
   }
 
-  async function submitImage(e: React.FormEvent) {
-    e.preventDefault();
-    if (!imgFile) return;
-    setErr(null);
-    setQueued(null);
-    setLoading(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", imgFile, imgFile.name);
-      if (imgTitle) fd.append("title", imgTitle);
-      fd.append("kind", imgKind);
-      if (imgUrl) fd.append("url", imgUrl);
-      if (vlmModel) fd.append("model", vlmModel);
-      if (imgTextModel) fd.append("text_model", imgTextModel);
-
-      const res = await fetch("/api/ingest-image", { method: "POST", body: fd });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
-      setQueued(readQueued(j));
-      setImgTitle("");
-      setImgFile(null);
-      setImgPreview(null);
-      setImgUrl("");
-      if (imgInputRef.current) imgInputRef.current.value = "";
-    } catch (e) {
-      setErr(String(e instanceof Error ? e.message : e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function submitCode(e: React.FormEvent) {
-    e.preventDefault();
-    if (!codeFile) return;
-    setErr(null);
-    setQueued(null);
-    setLoading(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", codeFile, codeFile.name);
-      if (codeTitle) fd.append("title", codeTitle);
-      if (codeUrl) fd.append("url", codeUrl);
-      if (textModel) fd.append("model", textModel);
-
-      const res = await fetch("/api/ingest-code", { method: "POST", body: fd });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
-      setQueued(readQueued(j));
-      setCodeTitle("");
-      setCodeFile(null);
-      setCodeUrl("");
-      if (codeInputRef.current) codeInputRef.current.value = "";
-    } catch (e) {
-      setErr(String(e instanceof Error ? e.message : e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
   return (
     <div className="px-4 sm:px-6 md:px-10 py-6 md:py-10 max-w-3xl">
       <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
@@ -219,7 +132,7 @@ export default function IngestPage() {
         Drop in a knowledge source.
       </h1>
       <p className="mt-2 text-[var(--muted-foreground)] max-w-xl">
-        Paste text, upload a file, or drop an image. The brain extracts atomic facts,
+        Paste text or upload a file. The brain extracts atomic facts,
         processes, decisions, owners, policies, and gotchas — then reconciles them
         against existing knowledge in ChromaDB.
       </p>
@@ -229,8 +142,6 @@ export default function IngestPage() {
         {([
           { id: "text", label: "Text / Paste" },
           { id: "file", label: "File Upload" },
-          { id: "image", label: "Image / VLM" },
-          { id: "code", label: "Code / Repo" },
         ] as { id: Tab; label: string }[]).map((t) => (
           <button
             key={t.id}
@@ -408,151 +319,6 @@ export default function IngestPage() {
           />
 
           <SubmitRow loading={loading} disabled={!uploadFile} label="Extract knowledge" />
-        </form>
-      )}
-
-      {/* ── Image form ── */}
-      {tab === "image" && (
-        <form onSubmit={submitImage} className="mt-8 space-y-4">
-          <div className="rounded-md border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 px-4 py-3 text-sm text-blue-800 dark:text-blue-300">
-            <span className="font-medium">VLM pipeline</span> — Upload a screenshot, architecture diagram,
-            whiteboard photo, or slide. The vision model describes it, then the 70B model extracts
-            knowledge units.
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">
-            <Field label="Source type">
-              <select
-                value={imgKind}
-                onChange={(e) => setImgKind(e.target.value as KindValue)}
-                className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm"
-              >
-                {KINDS.map((k) => (
-                  <option key={k.value} value={k.value}>{k.label}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Title (optional)">
-              <input
-                value={imgTitle}
-                onChange={(e) => setImgTitle(e.target.value)}
-                placeholder="e.g. System architecture diagram Q2 2026"
-                className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm"
-              />
-            </Field>
-          </div>
-
-          <Field label="Source URL (optional)">
-            <input
-              value={imgUrl}
-              onChange={(e) => setImgUrl(e.target.value)}
-              placeholder="https://…"
-              className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm"
-            />
-          </Field>
-
-          <Field label="Image file">
-            <input
-              ref={imgInputRef}
-              type="file"
-              accept="image/*"
-              onChange={onImgChange}
-              required
-              className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm file:mr-3 file:rounded file:border-0 file:bg-[var(--foreground)] file:text-[var(--background)] file:px-3 file:py-1 file:text-xs file:font-medium"
-            />
-          </Field>
-
-          {imgPreview && (
-            <div className="rounded-md border overflow-hidden">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={imgPreview}
-                alt="Preview"
-                className="max-h-64 w-full object-contain bg-[var(--muted)]/20"
-              />
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <ModelPicker
-              value={vlmModel}
-              onChange={setVlmModel}
-              mode="vlm"
-              label="Vision model (optional)"
-              hint="image → description"
-            />
-            <ModelPicker
-              value={imgTextModel}
-              onChange={setImgTextModel}
-              mode="text"
-              label="Extraction model (optional)"
-              hint="description → units"
-            />
-          </div>
-
-          <SubmitRow loading={loading} disabled={!imgFile} label="Ingest via VLM" />
-        </form>
-      )}
-
-      {/* ── Code form ── */}
-      {tab === "code" && (
-        <form onSubmit={submitCode} className="mt-8 space-y-4">
-          <div className="rounded-md border border-purple-200 bg-purple-50 dark:bg-purple-950/20 dark:border-purple-800 px-4 py-3 text-sm text-purple-800 dark:text-purple-300">
-            <span className="font-medium">Code map mode</span> — drop a{" "}
-            <strong>.zip of your repo</strong> or a single code/doc file. BrainOS
-            builds a file-tree map, extracts rationale from <strong>READMEs,
-            ADRs, RFCs, CONTRIBUTING</strong>, parses <strong>CODEOWNERS</strong>{" "}
-            into ownership facts, and links existing entities to file paths.
-            <br />
-            <span className="opacity-70">We do not embed code bodies — that&apos;s
-            Cursor&apos;s job. We capture <em>why</em> your code is the way it is.</span>
-          </div>
-
-          <Field label="Title (optional)">
-            <input
-              value={codeTitle}
-              onChange={(e) => setCodeTitle(e.target.value)}
-              placeholder="e.g. brainos-main · 2026-05"
-              className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm"
-            />
-          </Field>
-
-          <Field label="Source URL (optional)">
-            <input
-              value={codeUrl}
-              onChange={(e) => setCodeUrl(e.target.value)}
-              placeholder="https://github.com/org/repo"
-              className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm"
-            />
-          </Field>
-
-          <Field label="File (.zip of a repo, or a single code/doc file)">
-            <input
-              ref={codeInputRef}
-              type="file"
-              accept=".zip,.py,.ts,.tsx,.js,.jsx,.go,.rs,.java,.kt,.swift,.rb,.php,.cs,.cpp,.c,.h,.scala,.clj,.ex,.exs,.ml,.lua,.sh,.html,.css,.md,.mdx,.rst,.adoc,.txt,.yaml,.yml,.toml,.json,.sql,.graphql,application/zip"
-              onChange={(e) => setCodeFile(e.target.files?.[0] ?? null)}
-              required
-              className="w-full rounded-md border bg-[var(--card)] px-3 py-2 text-sm file:mr-3 file:rounded file:border-0 file:bg-[var(--foreground)] file:text-[var(--background)] file:px-3 file:py-1 file:text-xs file:font-medium"
-            />
-          </Field>
-
-          {codeFile && (
-            <div className="text-[11px] text-[var(--muted-foreground)]">
-              {codeFile.name} · {(codeFile.size / 1024).toFixed(1)} KB
-              {codeFile.name.toLowerCase().endsWith(".zip") && " · zip → repo walk"}
-            </div>
-          )}
-
-          <ModelPicker
-            value={textModel}
-            onChange={setTextModel}
-            mode="text"
-            label="Rationale extraction model (optional)"
-            hint="used on READMEs, ADRs, RFCs"
-          />
-
-          <SubmitRow loading={loading} disabled={!codeFile} label="Build code map" />
         </form>
       )}
 

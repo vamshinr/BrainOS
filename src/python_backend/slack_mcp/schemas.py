@@ -22,6 +22,12 @@ class SlackSourceDocument(BaseModel):
     department: str = "general"
     url: Optional[str] = None
     message_count: int = 0
+    # Sender identity + send time, resolved at ingest so the brain captures
+    # who said something and when (not just raw Slack IDs / epoch floats).
+    user_id: Optional[str] = None
+    user_name: Optional[str] = None
+    message_ts: Optional[str] = None   # raw Slack ts, e.g. "1779348833.073879"
+    message_at: Optional[str] = None   # ISO 8601 UTC derived from message_ts
     raw: dict[str, Any] = Field(default_factory=dict)
 
 

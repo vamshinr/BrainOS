@@ -12,7 +12,7 @@ from core.logging import _utc_now_iso, _debug_event
 class Job:
     def __init__(self, *, kind: str, title: str, handler, payload: Optional[dict] = None):
         self.id = str(uuid.uuid4())[:8]
-        self.kind = kind                  # "ingest_text" | "ingest_file" | "ingest_image"
+        self.kind = kind                  # "ingest_text" | "ingest_file" | "slack_realtime"
         self.title = title
         self.status = "queued"            # queued | running | completed | failed | canceled
         self.progress = 0.0               # 0..1

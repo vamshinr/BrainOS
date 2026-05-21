@@ -61,7 +61,8 @@ async def slack_resync(limit: int = 50):
     Returns a summary of how many messages were fetched and enqueued per
     channel.
     """
-    from slack_mcp.web_poller import _bot_token, _build_doc, POLLER_STATE_FILE
+    from slack_mcp.web_poller import _bot_token, POLLER_STATE_FILE
+    from slack_mcp.enrich import build_slack_document, resolve_channel_name, resolve_user_name
     token = _bot_token()
     if not token:
         raise HTTPException(status_code=400, detail="no Slack bot token configured")
@@ -114,6 +115,8 @@ async def slack_resync(limit: int = 50):
             enqueued = 0
             department = cfg.department_for_channel(ch)
             ceo_alerts = ch in cfg.ceo_decision_alert_channels
+            # Resolve the channel ID → name once per channel (cached).
+            channel_name = await resolve_channel_name(ch, token, c)
             for m in messages:
                 ts = str(m.get("ts") or "")
                 if not ts:
@@ -126,18 +129,15 @@ async def slack_resync(limit: int = 50):
                 text = str(m.get("text") or "").strip()
                 if not text:
                     continue
-                event_like = {
-                    "type": "message",
-                    "ts": ts,
-                    "thread_ts": m.get("thread_ts"),
-                    "user": m.get("user"),
-                    "channel": ch,
-                    "text": text,
-                }
-                doc = _build_doc(
-                    event=event_like,
+                user_id = str(m.get("user") or "unknown")
+                user_name = await resolve_user_name(user_id, token, c)
+                doc = build_slack_document(
                     channel_id=ch,
-                    channel_name=ch,
+                    channel_name=channel_name,
+                    user_id=user_id,
+                    user_name=user_name,
+                    ts=ts,
+                    thread_ts=m.get("thread_ts"),
                     department=department,
                     text=text,
                 )

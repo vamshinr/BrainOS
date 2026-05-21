@@ -1,4 +1,4 @@
-"""Ingest routes: text, file, image, code, and mock."""
+"""Ingest routes: text, file, and mock."""
 from __future__ import annotations
 import uuid
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
@@ -13,8 +13,6 @@ from storage.chroma import collection
 from agents import ingest_agent, struct_agent
 from jobs.handlers.text import _handler_ingest_text
 from jobs.handlers.file import _handler_ingest_file
-from jobs.handlers.image import _handler_ingest_image
-from jobs.handlers.code import _handler_ingest_code
 
 router = APIRouter()
 
@@ -78,76 +76,6 @@ async def ingest_file(
         payload={"kind": kind, "title": title, "url": url, "model": model,
                  "filename": filename, "data": data,
                  "valid_from": valid_from, "valid_to": valid_to},
-    )
-    return {
-        "job_id": job.id,
-        "status": "queued",
-        "queue_position": job_queue.queue_position(job.id),
-        "title": title,
-    }
-
-
-@router.post("/api/ingest_image")
-async def ingest_image(
-    title: Optional[str] = Form(None),
-    kind: str = Form("doc"),
-    url: Optional[str] = Form(None),
-    model: Optional[str] = Form(None),       # VLM model override
-    text_model: Optional[str] = Form(None),  # extraction model override
-    valid_from: Optional[str] = Form(None),
-    valid_to: Optional[str] = Form(None),
-    file: UploadFile = File(...),
-):
-    """Enqueue an image ingest job (VLM → extraction → store)."""
-    image_data = await file.read()
-    mime = file.content_type or "image/png"
-    if not title:
-        fname = file.filename or "image"
-        title = fname.rsplit(".", 1)[0] or fname
-    _debug_event(
-        "ingest.image.enqueue", "Queued image ingestion job",
-        title=title, kind=kind, url=url, vlm_model=model, text_model=text_model,
-        filename=file.filename, content_type=file.content_type, bytes=len(image_data),
-    )
-    job = job_queue.submit(
-        kind="ingest_image", title=title, handler=_handler_ingest_image,
-        payload={"kind": kind, "title": title, "url": url, "filename": file.filename,
-                 "data": image_data, "mime": mime,
-                 "vlm_model": model, "text_model": text_model},
-    )
-    return {
-        "job_id": job.id,
-        "status": "queued",
-        "queue_position": job_queue.queue_position(job.id),
-        "title": title,
-    }
-
-
-@router.post("/api/ingest_code")
-async def ingest_code(
-    title: Optional[str] = Form(None),
-    url: Optional[str] = Form(None),
-    model: Optional[str] = Form(None),       # extraction model override
-    file: UploadFile = File(...),
-):
-    """Enqueue a code-ingest job. Accepts:
-       • a .zip of a repo (preferred) — full file-tree map + CODEOWNERS +
-         ADR/RFC/README rationale extraction
-       • a single code/doc file — classification + rationale if applicable
-    Does NOT embed code bodies; see _handler_ingest_code for the contract."""
-    data = await file.read()
-    filename = file.filename or "upload"
-    if not title:
-        title = filename.rsplit(".", 1)[0] or filename
-    _debug_event(
-        "ingest.code.enqueue", "Queued code ingestion job",
-        title=title, filename=file.filename, content_type=file.content_type,
-        bytes=len(data),
-    )
-    job = job_queue.submit(
-        kind="ingest_code", title=title, handler=_handler_ingest_code,
-        payload={"title": title, "url": url, "model": model,
-                 "filename": filename, "data": data},
     )
     return {
         "job_id": job.id,

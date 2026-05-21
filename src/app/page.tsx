@@ -30,6 +30,7 @@ type ActivityItem = {
   capturedAt: string;
   channelId?: string;
   channelName?: string;
+  sender?: string;
   text?: string;
 };
 
@@ -146,6 +147,7 @@ export default function HomePage() {
               channelId?: string;
               capturedAt?: string;
               content?: string;
+              senderName?: string;
             }) => {
               const kind: ActivityKind =
                 s.kind === "slack"
@@ -164,6 +166,10 @@ export default function HomePage() {
                 capturedAt: s.capturedAt || "",
                 channelId: s.channelId,
                 channelName: undefined,
+                sender:
+                  kind === "slack" && !isRawSlackId(s.senderName)
+                    ? s.senderName
+                    : undefined,
                 text,
               };
             },
@@ -369,18 +375,18 @@ function SettingsMenu() {
               }}
               className="block w-full px-3.5 py-2.5 text-left hover:bg-[var(--muted)]/60 transition-colors disabled:opacity-50"
             >
-              <div className="text-sm font-medium">
+              {/* <div className="text-sm font-medium">
                 {resyncing ? "Re-syncing…" : "Re-sync Slack history"}
-              </div>
+              </div> */}
               <div className="text-[11px] text-[var(--muted-foreground)]">
                 {resyncResult || "Pull the last 50 messages per channel"}
               </div>
             </button>
             <div className="my-1 border-t border-[var(--border)]" />
-            <MenuLink href="/skills" label="Export for agents" hint="SKILLS.md briefs" />
-            <MenuLink href="/code" label="Codebase" hint="Repo intelligence" />
-            <MenuLink href="/metrics" label="Infrastructure" hint="GPU / models" />
-            <MenuLink href="/failures" label="Loop traps" hint="Agent debugging" />
+            {/* <MenuLink href="/skills" label="Export for agents" hint="SKILLS.md briefs" /> */}
+            {/* <MenuLink href="/code" label="Codebase" hint="Repo intelligence" /> */}
+            {/* <MenuLink href="/metrics" label="Infrastructure" hint="GPU / models" /> */}
+            {/* <MenuLink href="/failures" label="Loop traps" hint="Agent debugging" /> */}
             <div className="my-1 border-t border-[var(--border)]" />
             <button
               type="button"
@@ -634,7 +640,7 @@ function ActivityRow({
           <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--muted-foreground)]">
             <span className="font-medium">
               {item.kind === "slack"
-                ? "Slack message"
+                ? item.sender || "Slack message"
                 : item.kind === "doc"
                   ? "Document"
                   : "Source"}
@@ -745,11 +751,6 @@ function QuickActionsCard() {
           label="Manage Slack"
           hint="Channels, mappings"
         />
-        <ActionRow
-          href="/welcome"
-          label="Re-run onboarding"
-          hint="Walk through setup again"
-        />
       </div>
     </div>
   );
@@ -800,6 +801,13 @@ function extractSlackText(content: string): string {
   // header lines and any JSON wrapper, return a short readable snippet.
   const cleaned = content.replace(/^\s*\{[^}]*?"(messages|results)":\s*"/, "").slice(0, 240);
   return cleaned.trim() || content.slice(0, 240);
+}
+
+// Slack user/channel IDs look like "U0B2LN61Z0B" / "W123ABC456". When the
+// bot token lacks the users:read scope we can't resolve them to display
+// names — treat a bare ID as "no name" so the UI doesn't show a cryptic code.
+function isRawSlackId(value: string | undefined): boolean {
+  return !!value && /^[UW][A-Z0-9]{6,}$/.test(value);
 }
 
 function isFresh(iso: string, ms: number): boolean {

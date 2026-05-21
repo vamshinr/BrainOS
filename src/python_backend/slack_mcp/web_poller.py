@@ -26,6 +26,7 @@ import httpx
 
 from .auth import SLACK_DATA_DIR, SlackMCPConfig
 from .schemas import SlackSourceDocument
+from .enrich import build_slack_document, resolve_channel_name, resolve_user_name
 
 
 SLACK_API_BASE = "https://slack.com/api"
@@ -102,46 +103,6 @@ def _save_state(last_seen_ts: dict[str, str]) -> None:
             json.dump({"last_seen_ts": last_seen_ts}, f, indent=2)
     except Exception:
         pass
-
-
-def _build_doc(
-    *,
-    event: dict[str, Any],
-    channel_id: str,
-    channel_name: str,
-    department: str,
-    text: str,
-) -> SlackSourceDocument:
-    """Match the shape produced by slack_routes._slack_event_document so the
-    downstream pipeline can't tell whether the message came from the webhook
-    or this poller."""
-    ts = str(event.get("ts") or "")
-    thread_ts = str(event.get("thread_ts") or ts or "")
-    user = str(event.get("user") or "unknown")
-    title = f"Slack Realtime: {channel_name}"
-    if thread_ts:
-        title = f"{title} / {thread_ts}"
-    lines = [
-        title,
-        "",
-        f"channel: {channel_name}",
-        f"channel_id: {channel_id}",
-        f"thread_ts: {thread_ts}",
-        f"department: {department}",
-        "",
-        f"{user} [{ts}]",
-        text,
-    ]
-    return SlackSourceDocument(
-        title=title,
-        content="\n".join(lines).strip(),
-        channel_id=channel_id,
-        channel_name=channel_name,
-        thread_ts=thread_ts or None,
-        department=department,
-        message_count=1,
-        raw={"event_ts": ts, "event_type": "message", "user": user, "source": "poller"},
-    )
 
 
 async def _resolve_bot_user_id(client: httpx.AsyncClient, token: str) -> str | None:
@@ -222,6 +183,10 @@ async def _poll_cycle(
                 )
             continue
 
+        # Resolve the channel ID → name once per cycle (cached across cycles)
+        # so job titles and stored sources read "#all-brainos", not "C0B2…".
+        channel_name = await resolve_channel_name(channel_id, token, client)
+
         for m in msgs:
             ts = str(m.get("ts") or "")
             if not ts:
@@ -239,18 +204,15 @@ async def _poll_cycle(
                 continue
 
             department = config.department_for_channel(channel_id)
-            event_like = {
-                "type": "message",
-                "ts": ts,
-                "thread_ts": m.get("thread_ts"),
-                "user": m.get("user"),
-                "channel": channel_id,
-                "text": text,
-            }
-            doc = _build_doc(
-                event=event_like,
+            user_id = str(m.get("user") or "unknown")
+            user_name = await resolve_user_name(user_id, token, client)
+            doc = build_slack_document(
                 channel_id=channel_id,
-                channel_name=channel_id,  # Web API doesn't include name here
+                channel_name=channel_name,
+                user_id=user_id,
+                user_name=user_name,
+                ts=ts,
+                thread_ts=m.get("thread_ts"),
                 department=department,
                 text=text,
             )

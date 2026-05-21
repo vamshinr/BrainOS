@@ -99,9 +99,24 @@ def _temporal_fields(unit: dict, source: dict | None = None) -> dict:
     return {k: v for k, v in fields.items() if v}
 
 
+def _recency_factor(unit: dict) -> float:
+    """Mild boost for recently-observed facts: 1.0 for something observed
+    today, decaying linearly to a 0.85 floor at a year old. Lets 'latest' /
+    'recently' queries surface fresh knowledge (e.g. Slack messages whose
+    observedAt now carries the real send time) above stale-but-current facts.
+    """
+    observed = _parse_date(unit.get("observedAt"))
+    if not observed:
+        return 1.0
+    age_days = (_today_utc() - observed).days
+    if age_days <= 0:
+        return 1.0
+    return max(0.85, 1.0 - 0.15 * min(age_days, 365) / 365)
+
+
 def _detect_temporal_intent(query: str) -> dict:
     q = query.lower()
-    if re.search(r"\b(now|current|currently|today|latest|active)\b", q):
+    if re.search(r"\b(now|current|currently|today|latest|active|recent|recently|lately)\b", q):
         return {"mode": "current", "target_date": _today_utc().isoformat()}
     if re.search(r"\b(after|from|starting|effective)\b", q):
         mode = "future"
@@ -147,7 +162,9 @@ def _unit_temporal_score(unit: dict, intent: dict) -> float:
             return 1.35
 
     if mode == "current":
-        return {"current": 1.35, "unknown": 1.0, "future": 0.65, "historical": 0.55, "expired": 0.45}.get(status, 1.0)
+        base = {"current": 1.35, "unknown": 1.0, "future": 0.65, "historical": 0.55, "expired": 0.45}.get(status, 1.0)
+        # Among current facts, prefer the freshest — drives "recently" queries.
+        return base * _recency_factor(unit)
     if mode == "future":
         return {"future": 1.4, "current": 1.0, "unknown": 0.9, "historical": 0.55, "expired": 0.5}.get(status, 1.0)
     if mode == "historical":

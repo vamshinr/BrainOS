@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 
 type JobStatus = "queued" | "running" | "completed" | "failed" | "canceled";
-type JobKind = "ingest_text" | "ingest_file" | "ingest_image" | string;
+type JobKind = "ingest_text" | "ingest_file" | string;
 
 interface Job {
   id: string;
@@ -28,7 +28,6 @@ interface Snapshot {
 const KIND_LABEL: Record<string, string> = {
   ingest_text: "text",
   ingest_file: "file",
-  ingest_image: "image",
   slack_realtime: "Slack",
 };
 

@@ -53,6 +53,14 @@ def ingest_slack_document(
         "department": doc.department,
         "messageCount": doc.message_count,
         "charCount": len(doc.content),
+        # Who sent the message and when it was sent (Slack ts → ISO). The UI
+        # surfaces senderName; documentDate feeds the temporal pipeline so the
+        # message's send time — not the ingest time — drives observedAt.
+        "senderId": doc.user_id,
+        "senderName": doc.user_name,
+        "messageTs": doc.message_ts,
+        "messageAt": doc.message_at,
+        "documentDate": doc.message_at,
     }
     result = struct_agent.embed_and_store(
         source_id=source_id,

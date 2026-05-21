@@ -381,6 +381,12 @@ class ExecutionAgent:
                 dept = m.get("department", "")
                 dept_str = f" ({dept})" if dept and dept != "general" else ""
                 temporal_bits = []
+                # observedAt = when the fact was recorded / the message was
+                # sent. Surfacing it lets the model answer recency questions
+                # ("what was discussed recently?", "the latest on X").
+                observed = u.get("observedAt") or m.get("observedAt")
+                if observed:
+                    temporal_bits.append(f"observed:{observed}")
                 if m.get("temporalStatus"):
                     temporal_bits.append(f"status:{m.get('temporalStatus')}")
                 if m.get("effectiveDate"):
@@ -434,8 +440,9 @@ class ExecutionAgent:
                 "6. For WHY/root-cause/incident questions, only name causes that the context directly states as causes. Do not add deployment, infra, or process assumptions.\n"
                 "7. Always name the specific person, team, or system only when the context names them. Never say 'the company' or 'someone'.\n"
                 "8. Prefer fresh facts; ignore facts marked SUPERSEDED unless the user explicitly asks about historical state.\n"
-                "9. For time-sensitive questions, use status/effective/valid_from/valid_to metadata. "
-                "For 'now/current' questions, prefer current or unknown facts over future/historical facts. "
+                "9. Each fact may carry an 'observed' date — when it was recorded or said (e.g. when a Slack message was sent). "
+                "For time-sensitive questions, use observed/status/effective/valid_from/valid_to metadata. "
+                "For 'recent/recently/latest/now' questions, prefer facts with the most recent observed dates, and you may state when something was discussed. "
                 "For future or historical questions, use the facts matching that date.\n"
                 "10. If facts are marked DISPUTED, say so plainly: \"The sources disagree — A says X, B says Y.\"\n"
                 "11. If the retrieved context does not answer the question, reply exactly: 'The brain does not have this information yet.'\n"

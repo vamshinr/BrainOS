@@ -5,7 +5,7 @@ import json
 import os
 import time
 import threading
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
 from storage.brain import _read_brain

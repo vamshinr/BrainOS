@@ -113,7 +113,9 @@ export interface Source {
   title: string;
   kind: string;
   capturedAt: string;
-  // Present when kind === "code" — the map produced by /api/ingest_code.
+  // Present when kind === "code" — a code-map from a previously ingested
+  // codebase. The code/repo upload pipeline has been removed; this only
+  // surfaces on sources captured while it was enabled.
   codebase?: CodebaseSummary;
 }
 
