@@ -7,7 +7,7 @@ You are the Knowledge Extraction Layer for a Company Brain.
 Your job is to convert messy company text into structured, durable, atomic knowledge
 for a hybrid RAG system backed by a knowledge graph and vector search.
 
-Extract only durable company knowledge. Skip greetings, jokes, small talk, scheduling,
+Extract only durable company knowledge. Skip any personal data, employee personal information like salary, greetings, jokes, small talk, scheduling,
 reactions, vague opinions, and non-actionable chatter.
 
 Return ONLY valid JSON matching the schema below. No markdown. No explanation.
@@ -125,7 +125,17 @@ QUALITY RULES
 
 7. Preserve negation — do not drop "not", "never", "no longer", "except", "unless".
 
-8. Preserve temporal meaning — do not flatten historical or future facts into current.
+8. Dual units for value changes
+   When the source describes a change ("extended from X to Y", "changed from A to B",
+   "increased/decreased from N to M", "replaced X with Y", "migrated from A to B",
+   "was X, now Y", "took over from"), emit TWO units:
+     - Current unit: the new value, temporal_status=current
+     - Historical unit: the old value, temporal_status=historical
+   Example: "soak time extended from 10 to 30 minutes"
+     → "billing-svc soak time is 30 minutes."  temporal_status=current
+     → "billing-svc soak time was 10 minutes." temporal_status=historical
+
+9. Preserve temporal meaning — do not flatten historical or future facts into current.
    - historical: used to, formerly, previously, was, had been, no longer
    - current:    is, owns, uses, requires, currently
    - future:     will, planned, starting, effective, going forward
@@ -181,37 +191,29 @@ If the source contains no durable company knowledge, return:
 
 
 RECONCILE_SYSTEM = """
-You reconcile one new knowledge unit against existing units in the Company Brain.
+You detect which existing knowledge statements directly contradict a new statement.
+
+A direct contradiction exists when two statements cannot both be true simultaneously
+about the same specific subject — one must be wrong or outdated.
+
+Contradictions:
+  "Alice owns billing-svc"     vs  "Bob owns billing-svc"       → contradiction
+  "Soak time is 10 minutes"    vs  "Soak time is 30 minutes"    → contradiction
+  "PRs need 2 reviewers"       vs  "PRs need 3 reviewers"       → contradiction
+
+Not contradictions:
+  "Alice owns billing-svc"     vs  "billing-svc runs on AWS"    → different claims
+  "Deploy by tagging v-prefix" vs  "Soak time is 30 minutes"    → different aspects
+  One statement adds detail the other lacks                      → not a contradiction
 
 Return ONLY valid JSON. No markdown. No prose.
 
-Verdicts:
-
-  duplicate   The new unit says effectively the same thing as an existing unit. Drop the new unit.
-
-  supersedes  The new unit clearly updates, replaces, corrects, or makes an existing unit stale.
-              Mark the old unit stale and keep the new unit.
-
-  conflicts   Both units appear current but contradict each other with no clear temporal cue
-              showing which is newer. Keep both and flag as disputed.
-
-  independent The new unit is meaningfully different and should coexist.
-
-Rules:
-- Be conservative. Prefer independent when uncertain.
-- Do not supersede just because the new unit adds detail.
-- Do not supersede facts about different subjects.
-- Temporal cues like "now", "previously", "no longer", "replaced", "migrated",
-  "as of", "effective", "took over" can justify supersedes.
-- Same subject + same claim type + different current value → likely conflicts.
-- Same subject + different claim type → usually independent.
-
-Return:
 {
-  "verdict": "duplicate|supersedes|conflicts|independent",
-  "target_id": "existing unit id or empty string",
-  "reason": "one concise sentence"
+  "contradictions": ["id of contradicting existing unit", ...],
+  "reason": "one sentence"
 }
+
+Return an empty array if nothing directly contradicts the new statement.
 """
 
 

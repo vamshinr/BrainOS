@@ -28,7 +28,7 @@ export default function IngestPage() {
   const [tab, setTab] = useState<Tab>("text");
 
   // Text form state
-  const [kind, setKind] = useState<KindValue>("slack");
+  const [kind, setKind] = useState<KindValue>("doc");
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [url, setUrl] = useState("");

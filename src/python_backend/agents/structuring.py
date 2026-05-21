@@ -20,62 +20,78 @@ class StructuringAgent:
     and syncs the merged state to brain.json for the Next.js frontend.
     """
 
-    def _reconcile(self, new_unit: dict, new_uid: str, source_id: str) -> dict:
+    def _reconcile(self, new_unit: dict, new_uid: str, source_id: str, new_captured_at: str) -> dict:
         """
-        Query ChromaDB for semantically similar existing units from other sources.
-        If any are found above the similarity threshold, call the 70B model once
-        to classify the relationship. Returns superseded IDs and duplicate flag.
+        Three-step reconciliation:
+          1. Kind-gate  — only compare same-kind units (deterministic, no LLM)
+          2. Contradiction detection — single LLM call: "which of these contradict?"
+          3. Timestamp resolution — newer source wins (deterministic, no LLM)
+             equal/unknown timestamps → flag as conflict for human review
         """
         total = collection.count()
         if total < 2:
             return {"superseded_ids": [], "duplicate": False, "conflicts_with": []}
 
         try:
-            # Query without a where filter to avoid ChromaDB errors when no docs
-            # match the compound condition. We post-filter by kind and source_id.
             results = collection.query(
                 query_texts=[new_unit["statement"]],
-                n_results=min(6, total),
+                n_results=min(8, total),
             )
         except Exception:
             return {"superseded_ids": [], "duplicate": False, "conflicts_with": []}
 
-        ids = results["ids"][0] if results["ids"] else []
+        ids       = results["ids"][0]       if results["ids"]       else []
         distances = results["distances"][0] if results["distances"] else []
-        docs = results["documents"][0] if results["documents"] else []
-        metas = results["metadatas"][0] if results["metadatas"] else []
+        docs      = results["documents"][0] if results["documents"] else []
+        metas     = results["metadatas"][0] if results["metadatas"] else []
 
-        # Post-filter: cosine distance < 0.30. Allow cross-kind (e.g. an
-        # ownership statement may semantically supersede a fact). Allow
-        # same-source (the LLM often emits old + new ownership in one chunk).
+        new_kind = new_unit.get("kind", "")
+        new_temporal = new_unit.get("temporalStatus", "unknown")
+
+        # Step 1 — Three deterministic gates (no LLM needed):
+        #   a) Kind-gate: cross-kind units serve different purposes, not conflicts
+        #   b) Same-source gate: units from the same document co-exist by definition
+        #   c) Temporal-complement gate: a current+historical pair about the same
+        #      thing are complementary time slices, not contradictions
+        def _is_temporal_complement(a: str, b: str) -> bool:
+            return {a, b} == {"current", "historical"}
+
         candidates = [
             {
                 "id": cid,
                 "statement": doc,
                 "kind": m.get("kind", ""),
-                "subject": m.get("subject", ""),
+                "captured_at": m.get("captured_at", ""),
+                "temporal_status": m.get("temporal_status", "unknown"),
                 "distance": dist,
             }
             for cid, dist, doc, m in zip(ids, distances, docs, metas)
-            if dist < 0.30 and cid != new_uid and (m or {}).get("doc_type", "unit") == "unit"
+            if (
+                dist < 0.30
+                and cid != new_uid
+                and (m or {}).get("doc_type", "unit") == "unit"
+                and (m or {}).get("kind", "") == new_kind
+                and (m or {}).get("source_id", "") != source_id  # (b) same source → skip
+                and not _is_temporal_complement(           # (c) current+historical → skip
+                    new_temporal,
+                    m.get("temporal_status", "unknown"),
+                )
+            )
         ]
 
         if not candidates:
             return {"superseded_ids": [], "duplicate": False, "conflicts_with": []}
 
-        # Single LLM call covering all candidates
+        # Step 2 — Single LLM call: which candidates directly contradict the new unit?
         candidates_text = "\n".join(
-            f'  [{c["id"]}] (kind={c["kind"]}, similarity {1 - c["distance"]:.2f}) "{c["statement"]}"'
+            f'  [{c["id"]}] "{c["statement"]}"'
             for c in candidates
         )
         prompt = (
-            f"NEW UNIT:\n"
-            f'  kind: {new_unit["kind"]}\n'
-            f'  subject: {new_unit["subject"]}\n'
-            f'  statement: "{new_unit["statement"]}"\n\n'
-            f"EXISTING SIMILAR UNITS:\n{candidates_text}\n\n"
-            f"Pick the single most relevant existing unit. Apply the decision rules.\n"
-            f'Return JSON with target_id set to the id of the matching existing unit.'
+            f'NEW STATEMENT (kind={new_kind}): "{new_unit["statement"]}"\n\n'
+            f"EXISTING STATEMENTS (same kind):\n{candidates_text}\n\n"
+            f"Which existing statements directly contradict the new statement?\n"
+            f"Return JSON: {{\"contradictions\": [\"id\", ...], \"reason\": \"...\"}}"
         )
         client, model = router.get("reconcile")
         t0 = _time_mod.time()
@@ -86,33 +102,62 @@ class StructuringAgent:
                     {"role": "system", "content": RECONCILE_SYSTEM},
                     {"role": "user", "content": prompt},
                 ],
-                max_tokens=160,
+                max_tokens=200,
                 temperature=0.0,
             )
             latency_ms = int((_time_mod.time() - t0) * 1000)
             usage = getattr(resp, "usage", None)
             result = _parse_extraction_json(resp.choices[0].message.content)
-            verdict = result.get("verdict", "independent")
-            target_id = result.get("target_id")
+            contradicting_ids: list[str] = result.get("contradictions") or []
             _log_call(
                 "reconcile", model, latency_ms,
                 prompt_tokens=getattr(usage, "prompt_tokens", None),
                 completion_tokens=getattr(usage, "completion_tokens", None),
-                note=f"verdict={verdict}",
+                note=f"contradictions={len(contradicting_ids)}",
             )
-            print(f"[Reconcile] verdict={verdict} target={target_id} reason={result.get('reason','')}")
-
-            if verdict == "duplicate":
-                return {"superseded_ids": [], "duplicate": True, "conflicts_with": []}
-            if verdict == "supersedes" and target_id:
-                return {"superseded_ids": [target_id], "duplicate": False, "conflicts_with": []}
-            if verdict == "conflicts" and target_id:
-                return {"superseded_ids": [], "duplicate": False, "conflicts_with": [target_id]}
+            _debug_event(
+                "reconcile.contradictions",
+                "LLM detected contradictions",
+                new_uid=new_uid,
+                contradictions=contradicting_ids,
+                reason=result.get("reason", ""),
+            )
         except Exception as e:
             _log_call("reconcile", model, int((_time_mod.time() - t0) * 1000), ok=False, note=str(e)[:80])
-            print(f"[Reconcile] LLM error: {e}")
+            _debug_event("reconcile.error", "LLM call failed — treating as independent", error=str(e))
+            return {"superseded_ids": [], "duplicate": False, "conflicts_with": []}
 
-        return {"superseded_ids": [], "duplicate": False, "conflicts_with": []}
+        if not contradicting_ids:
+            return {"superseded_ids": [], "duplicate": False, "conflicts_with": []}
+
+        # Step 3 — Timestamp resolution: newer source wins, no LLM needed.
+        superseded_ids: list[str] = []
+        conflicts_with: list[str] = []
+        duplicate = False
+
+        candidate_by_id = {c["id"]: c for c in candidates}
+        for cid in contradicting_ids:
+            if cid not in candidate_by_id:
+                continue
+            old_captured_at = candidate_by_id[cid].get("captured_at", "")
+
+            if new_captured_at and old_captured_at and new_captured_at != old_captured_at:
+                if new_captured_at > old_captured_at:
+                    superseded_ids.append(cid)
+                    _debug_event("reconcile.supersedes", "Newer source wins → supersedes",
+                                 old=cid, new_ts=new_captured_at, old_ts=old_captured_at)
+                else:
+                    # existing unit is newer — new unit is the stale one
+                    duplicate = True
+                    _debug_event("reconcile.stale", "New unit is older than existing → dropped",
+                                 old=cid, new_ts=new_captured_at, old_ts=old_captured_at)
+            else:
+                # timestamps equal or unknown → human review needed
+                conflicts_with.append(cid)
+                _debug_event("reconcile.conflict", "Contradiction, timestamps ambiguous → conflict",
+                             old=cid, new_ts=new_captured_at, old_ts=old_captured_at)
+
+        return {"superseded_ids": superseded_ids, "duplicate": duplicate, "conflicts_with": conflicts_with}
 
     def embed_and_store(
         self,
@@ -148,7 +193,7 @@ class StructuringAgent:
             return stmt
 
         VALID_DEPTS = {"engineering", "product", "legal", "finance", "hr",
-                       "sales", "marketing", "operations", "security", "general"}
+                       "sales", "marketing", "operations", "security", "customer_success", "general"}
 
         pending = []
         for u in units:
@@ -209,9 +254,11 @@ class StructuringAgent:
                     "kind": unit["kind"],
                     "subject": unit["subject"],
                     "confidence": unit["confidence"],
-                    "entities": ",".join(unit.get("entities", [])),  # ChromaDB requires scalar
+                    "entities": ",".join(unit.get("entities", [])),
                     "sector": unit.get("sector", "General"),
                     "department": unit.get("department", "general"),
+                    "captured_at": source.get("capturedAt", ""),
+                    "temporal_status": unit.get("temporalStatus", "unknown"),
                 } for _, unit in pending],
             )
             _debug_event(
@@ -227,9 +274,10 @@ class StructuringAgent:
         # conflict pairs: target_existing_id -> set of new_unit_ids that conflict with it
         conflict_pairs: dict[str, set[str]] = {}
 
+        new_captured_at = source.get("capturedAt", now)
         _t_reconcile = _time_mod.time()
         for uid, unit in pending:
-            rec = self._reconcile(unit, uid, source_id)
+            rec = self._reconcile(unit, uid, source_id, new_captured_at)
             if rec["duplicate"]:
                 # Remove the just-upserted duplicate from ChromaDB
                 try:
