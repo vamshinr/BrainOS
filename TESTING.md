@@ -399,3 +399,116 @@ curl -s -X DELETE http://localhost:8081/api/clear
 4. **GPU embeddings require a separately served model** — set `EMBEDDING_API_BASE`
    in `.env` and start a second vLLM instance serving `BAAI/bge-large-en-v1.5`.
    Default is CPU sentence-transformers.
+
+
+
+# More testings
+
+  ---
+  Doc 1 — upload first (establishes the baseline)
+  Acme Engineering Runbook v1.2
+
+  Alice Chen owns billing-svc end-to-end. She is the primary on-call contact for all
+  payment-related incidents.
+
+  Bob Martinez owns auth-svc and the API gateway. He joined the team in January 2024.
+  
+  The billing-svc runs on AWS us-east-1 inside the payments VPC. It depends on auth-svc
+  for token validation before processing any charge.
+  
+  We chose Stripe over Adyen for v2 payments because Stripe had better EU coverage and
+  lower transaction fees for our volume.
+
+  P0 is defined as a customer-impacting outage affecting more than 5% of active users.
+  
+  All production PRs require 2 reviewers before merge. Exceptions must be approved by
+  an engineering director.
+  
+  GOTCHA: The Stripe webhook handler silently drops events when the Stripe-Signature
+  header is missing. No error is logged. This has caused billing sync failures twice.
+
+  The deployment process for billing-svc: merge to main, wait for CI to pass, tag a
+  v-prefix release (e.g. v2.4.1), then the release pipeline auto-deploys to staging
+  first and production after a 10-minute soak.
+
+  ---
+  Doc 2 — upload second (tests supersede on ownership + policy update)
+  Acme Org Update — May 2026
+  
+  Effective immediately, Bob Martinez has taken over billing-svc from Alice Chen.
+  Alice is moving to the infrastructure team. Bob now owns both billing-svc and auth-svc.
+  
+  Following the incident last quarter, the PR review policy has been updated. All
+  production PRs now require 3 reviewers before merge, not 2. Security-sensitive changes
+  require an additional sign-off from the security team.
+ 
+  The deployment soak time for billing-svc has been extended from 10 minutes to 30
+  minutes after two regressions slipped through in Q1.
+  Expect: Bob owns billing-svc supersedes Alice owns billing-svc. 3 reviewers supersedes 2 reviewers. 30 min soak supersedes 10 min soak.
+
+  ---
+  Doc 3 — upload third (tests conflict/dispute)
+  Engineering Wiki — Service Ownership (last edited by Carol Nguyen)
+  
+  billing-svc is owned by Carol Nguyen. She has been maintaining it since the
+  restructuring in April. 
+
+  auth-svc is owned by David Kim. David took over from Bob Martinez earlier this year.
+  Expect: Carol owns billing-svc conflicts with Bob owns billing-svc (no clear temporal signal). David owns auth-svc should supersede Bob owns 
+  auth-svc.
+
+  ---
+  Doc 4 — tests future + historical temporal
+  Acme Q3 2026 Planning Notes
+  
+  We used to use Adyen for payments processing before we migrated to Stripe in early 2024.
+  The Adyen integration is fully decommissioned.
+  
+  Starting September 1 2026, the legacy monolith billing module will be deprecated and
+  replaced by billing-svc entirely. Teams should migrate any direct calls to the monolith
+  before that date.
+
+  Effective 2026-07-01, Carol Nguyen will transfer ownership of billing-svc to the new
+  Platform team, led by Priya Shah. Until then Carol remains the owner.
+
+  The Python 2 compatibility layer in auth-svc will be removed by end of Q3 2026.
+  Expect: Adyen → historical. Monolith deprecation → future. Carol → Platform team transfer → future with valid_from. Python 2 removal → future.
+
+  ---
+  Doc 5 — tests duplicate detection
+  Acme Internal FAQ
+  
+  Q: What is our incident severity definition?
+  A: A P0 incident is a customer-facing outage impacting more than 5 percent of active
+  users. P1 is degraded performance affecting less than 5 percent.
+
+  Q: Which payment processor do we use?
+  A: The company standardized on Stripe for all subscription billing following an
+  evaluation in 2024. We previously evaluated Adyen but chose Stripe due to better
+  EU coverage.
+  
+  Q: Where does billing-svc run?
+  A: billing-svc is deployed on Amazon Web Services in the us-east-1 region.
+  Expect: P0 definition, Stripe decision, billing-svc location all flagged as duplicates of Doc 1 units.
+
+  ---
+  Doc 6 — tests entity canonicalization + relationship graph
+  Acme Vendor & Integration Map
+  
+  Stripe Inc. (also referred to as Stripe Payments and simply Stripe) is our primary
+  payment processor. billing-svc integrates with Stripe via webhook and REST API.
+
+  Amazon Web Services (AWS) hosts the majority of our infrastructure. auth-svc,
+  billing-svc, and the API gateway all run on AWS. We use AWS us-east-1 as the
+  primary region.
+
+  PagerDuty is used for on-call alerting. billing-svc and auth-svc both report
+  incidents to PagerDuty. The on-call rotation is managed by Bob Martinez.
+
+  Datadog is used for observability across all services. The billing-svc dashboard
+  in Datadog is the canonical source of truth for payment success rates.
+
+  GitHub is the code repository for all engineering projects. All services use
+  GitHub Actions for CI/CD pipelines.
+  Expect: "Stripe Inc.", "Stripe Payments", "Stripe" collapsed into one canonical entity. Rich relationship graph: billing-svc integrates_with 
+  Stripe, billing-svc depends_on auth-svc, etc.

@@ -131,9 +131,11 @@ export default function HomePage() {
           // with raw JSON content and just clutter the feed.
           .filter((s: { kind?: string; title?: string }) => {
             if (s.kind === "slack") {
+              // Only show auto-polled Slack messages, not MCP thread/search dumps
               return (s.title || "").startsWith("Slack Realtime:");
             }
-            return !!s.kind;
+            // Show all manually ingested sources (doc, email, meeting, wiki, etc.)
+            return true;
           })
           .slice(0, 8)
           .map(
