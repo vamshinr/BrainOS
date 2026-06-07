@@ -1,8 +1,6 @@
 "use client";
 
 import { useState, useRef } from "react";
-import type { IngestResult } from "@/lib/mnemosyne";
-import { relationColor } from "@/lib/mnemosyne";
 
 type Tab = "text" | "file";
 
@@ -18,12 +16,12 @@ export default function IngestPage() {
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [result, setResult] = useState<IngestResult | null>(null);
+  const [queued, setQueued] = useState<string | null>(null);
 
   async function submitText(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
-    setResult(null);
+    setQueued(null);
     setLoading(true);
     try {
       const res = await fetch("/api/ingest", {
@@ -33,7 +31,7 @@ export default function IngestPage() {
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
-      setResult(j as IngestResult);
+      setQueued(title || "Pasted text");
       setContent("");
       setTitle("");
     } catch (e) {
@@ -47,7 +45,7 @@ export default function IngestPage() {
     e.preventDefault();
     if (!uploadFile) return;
     setErr(null);
-    setResult(null);
+    setQueued(null);
     setLoading(true);
     try {
       const fd = new FormData();
@@ -56,7 +54,7 @@ export default function IngestPage() {
       const res = await fetch("/api/ingest-file", { method: "POST", body: fd });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
-      setResult(j as IngestResult);
+      setQueued(fileTitle || uploadFile.name);
       setFileTitle("");
       setUploadFile(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -86,7 +84,7 @@ export default function IngestPage() {
         ] as { id: Tab; label: string }[]).map((t) => (
           <button
             key={t.id}
-            onClick={() => { setTab(t.id); setErr(null); setResult(null); }}
+            onClick={() => { setTab(t.id); setErr(null); setQueued(null); }}
             className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${
               tab === t.id
                 ? "bg-[var(--foreground)] text-[var(--background)]"
@@ -162,59 +160,18 @@ export default function IngestPage() {
         </div>
       )}
 
-      {result && <IngestSummary result={result} />}
+      {queued && (
+        <div className="mt-6 rounded-md border border-[var(--accent)]/40 bg-[var(--accent)]/10 px-4 py-3 text-sm">
+          <span className="font-medium">Queued "{queued}".</span>{" "}
+          <span className="text-[var(--muted-foreground)]">
+            Track progress in the queue dock (bottom-right ↘). You can add more while it runs.
+          </span>
+        </div>
+      )}
     </div>
   );
 }
 
-function IngestSummary({ result }: { result: IngestResult }) {
-  const { counts, edges_created, events_reinforced } = result;
-  return (
-    <div className="mt-6 rounded-md border border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800 px-4 py-4 space-y-3">
-      <div className="text-sm font-medium">
-        Ingested {counts.created} event{counts.created === 1 ? "" : "s"} ·{" "}
-        {counts.edges} causal edge{counts.edges === 1 ? "" : "s"}
-        {counts.reinforced > 0 && ` · ${counts.reinforced} reinforced`}
-      </div>
-
-      {events_reinforced.length > 0 && (
-        <div className="text-xs text-[var(--muted-foreground)]">
-          Near-duplicates reinforced instead of duplicated:{" "}
-          {events_reinforced.map((r) => `${r.event_id.slice(0, 8)} (×${r.reinforcement_count})`).join(", ")}
-        </div>
-      )}
-
-      {edges_created.length > 0 && (
-        <div className="space-y-1.5">
-          <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
-            Causal edges inferred
-          </div>
-          {edges_created
-            .slice()
-            .sort((a, b) => b.confidence - a.confidence)
-            .map((e) => (
-              <div key={e.id} className="flex items-center gap-2 text-xs font-mono">
-                <span
-                  className="rounded px-1.5 py-0.5 text-white"
-                  style={{ background: relationColor(e.relation) }}
-                >
-                  {e.relation}
-                </span>
-                <span className="text-[var(--muted-foreground)]">
-                  {e.cause_id.slice(0, 8)} → {e.effect_id.slice(0, 8)}
-                </span>
-                <span className="ml-auto tabular-nums">{e.confidence.toFixed(2)}</span>
-              </div>
-            ))}
-        </div>
-      )}
-
-      <a href="/graph" className="inline-block text-xs underline text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
-        View the causal map →
-      </a>
-    </div>
-  );
-}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -235,12 +192,10 @@ function SubmitRow({ loading, disabled }: { loading: boolean; disabled: boolean 
         disabled={loading || disabled}
         className="rounded-md bg-[var(--foreground)] text-[var(--background)] px-4 py-2 text-sm font-medium disabled:opacity-50"
       >
-        {loading ? "Extracting…" : "Extract events"}
+        {loading ? "Queuing…" : "Add to queue"}
       </button>
       {loading && (
-        <span className="text-xs text-[var(--muted-foreground)]">
-          Extracting events and inferring causal edges (Haiku)…
-        </span>
+        <span className="text-xs text-[var(--muted-foreground)]">Queuing…</span>
       )}
     </div>
   );
