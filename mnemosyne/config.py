@@ -93,6 +93,10 @@ class Settings:
     # How many chunks to extract concurrently (1 = sequential).
     chunk_max_concurrency: int = field(default_factory=lambda: _i("CHUNK_MAX_CONCURRENCY", 4))
 
+    # --- Async ingestion job queue ---
+    job_workers: int = field(default_factory=lambda: _i("JOB_WORKERS", 2))
+    job_recent_limit: int = field(default_factory=lambda: _i("JOB_RECENT_LIMIT", 20))
+
     # --- Causal engine tuning ---
     confidence_threshold: float = field(default_factory=lambda: _f("CONFIDENCE_THRESHOLD", 0.55))
     temporal_tau_s: float = field(default_factory=lambda: _f("TEMPORAL_TAU_S", 1800.0))
