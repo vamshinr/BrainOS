@@ -10,7 +10,7 @@ export async function GET() {
     return NextResponse.json(data, { status: res.status });
   } catch (e) {
     return NextResponse.json(
-      { active: null, queued: [], recent: [], error: String(e) },
+      { active: [], queued: [], recent: [], error: String(e) },
       { status: 502 },
     );
   }
