@@ -384,7 +384,6 @@ function SettingsMenu() {
             </button>
             <div className="my-1 border-t border-[var(--border)]" />
             {/* <MenuLink href="/skills" label="Export for agents" hint="SKILLS.md briefs" /> */}
-            {/* <MenuLink href="/code" label="Codebase" hint="Repo intelligence" /> */}
             {/* <MenuLink href="/metrics" label="Infrastructure" hint="GPU / models" /> */}
             {/* <MenuLink href="/failures" label="Loop traps" hint="Agent debugging" /> */}
             <div className="my-1 border-t border-[var(--border)]" />

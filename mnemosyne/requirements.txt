@@ -1,0 +1,16 @@
+# Mnemosyne — Causal Memory Engine
+# Real implementations only (no stubs): Neo4j graph store, Qdrant vector store,
+# sentence-transformers embeddings, Anthropic LLM.
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+python-dotenv==1.0.1
+
+neo4j==5.27.0
+qdrant-client==1.12.1
+sentence-transformers==3.3.1
+anthropic==0.42.0
+
+pytest==8.3.4
+httpx==0.28.1

@@ -9,13 +9,10 @@ type NavItem = { href: string; label: string; hint: string };
 
 const BASE_NAV: NavItem[] = [
   { href: "/", label: "Brain", hint: "Overview" },
-  // BrainOS Agent feature is kept in the codebase, but hidden from navigation.
-  // { href: "/agent", label: "Agent", hint: "Autonomous AI · Gemma 4" },
   { href: "/ingest", label: "Ingest", hint: "Capture knowledge" },
   // { href: "/failures", label: "Traps", hint: "Loop memory" },
   { href: "/graph", label: "Map", hint: "Entities & links" },
   // { href: "/conflicts", label: "Conflicts", hint: "Resolve disputed facts" },
-  // { href: "/code", label: "Code", hint: "Codebase map · ownership · ADRs" },
   { href: "/ask", label: "Ask", hint: "Query the brain" },
   // { href: "/onboard", label: "Guide", hint: "Day-one onboarding generator" },
   // { href: "/skills", label: "Skills", hint: "Export for agents" },
