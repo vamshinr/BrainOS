@@ -28,9 +28,9 @@ echo "==> installing requirements (first run pulls torch — be patient)"
 pip install --quiet --upgrade pip
 pip install --quiet -r "$HERE/requirements.txt"
 
-if [ ! -f "$HERE/.env" ]; then
-  cp "$HERE/.env.example" "$HERE/.env"
-  echo "==> created mnemosyne/.env from template — set NEO4J_PASSWORD and ANTHROPIC_API_KEY"
+if [ ! -f "$REPO/.env" ]; then
+  cp "$REPO/.env.example" "$REPO/.env"
+  echo "==> created root .env from template — set NEO4J_PASSWORD and ANTHROPIC_API_KEY"
 fi
 
 echo "==> warming embedding model (all-MiniLM-L6-v2)"

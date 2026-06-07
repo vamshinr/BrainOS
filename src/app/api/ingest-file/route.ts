@@ -2,19 +2,11 @@ import { BACKEND_URL } from "@/lib/backend";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
-const ALLOWED_TYPES = new Set([
-  "application/pdf",
-  "text/plain",
-  "text/markdown",
-  "text/csv",
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/octet-stream", // fallback for .md files on some OS
-]);
-
-const ALLOWED_EXTS = /\.(pdf|txt|md|csv|doc|docx)$/i;
+// Mnemosyne ingests raw text only. We read text files server-side and forward
+// the contents to /ingest. PDF/DOC parsing is intentionally not supported.
+const TEXT_EXTS = /\.(txt|md|markdown|csv|log|json)$/i;
 
 export async function POST(req: Request) {
   const contentType = req.headers.get("content-type") ?? "";
@@ -26,44 +18,33 @@ export async function POST(req: Request) {
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
     const title = formData.get("title") as string | null;
-    const kind = (formData.get("kind") as string | null) ?? "doc";
-    const url = formData.get("url") as string | null;
-    const model = formData.get("model") as string | null;
 
     if (!file) {
       return NextResponse.json({ error: "file is required" }, { status: 400 });
     }
-
-    const ext = file.name.match(ALLOWED_EXTS);
-    if (!ext && !ALLOWED_TYPES.has(file.type)) {
+    if (!TEXT_EXTS.test(file.name) && !file.type.startsWith("text/")) {
       return NextResponse.json(
-        { error: "Unsupported file type. Upload PDF, DOC, DOCX, TXT, MD, or CSV." },
+        { error: "Mnemosyne ingests text only — upload .txt, .md, .csv, .log, or .json (PDF/DOC not supported)." },
         { status: 415 },
       );
     }
 
-    const backendFormData = new FormData();
-    backendFormData.append("file", file, file.name);
-    if (title) backendFormData.append("title", title);
-    backendFormData.append("kind", kind);
-    if (url) backendFormData.append("url", url);
-    if (model) backendFormData.append("model", model);
-
-    const backendRes = await fetch(`${BACKEND_URL}/api/ingest_file`, {
-      method: "POST",
-      body: backendFormData,
-    });
-
-    if (!backendRes.ok) {
-      const errText = await backendRes.text();
-      throw new Error(`Backend returned ${backendRes.status}: ${errText}`);
+    const text = await file.text();
+    if (!text.trim()) {
+      return NextResponse.json({ error: "File is empty" }, { status: 400 });
     }
 
-    // Pass the enqueue response through. See /api/ingest/route.ts for why.
-    const data = await backendRes.json();
-    return NextResponse.json(data, { status: backendRes.status });
+    const res = await fetch(`${BACKEND_URL}/ingest`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, source_id: title ?? file.name }),
+    });
+    if (!res.ok) {
+      throw new Error(`Mnemosyne ${res.status}: ${await res.text()}`);
+    }
+    return NextResponse.json(await res.json());
   } catch (e) {
-    console.error("File enqueue error:", e);
-    return NextResponse.json({ error: "Backend failed to enqueue file", detail: String(e) }, { status: 500 });
+    console.error("File ingest error:", e);
+    return NextResponse.json({ error: "File ingest failed", detail: String(e) }, { status: 500 });
   }
 }

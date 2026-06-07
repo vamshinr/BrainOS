@@ -1,0 +1,38 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Mnemosyne API (debug)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "mnemosyne",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/mnemosyne/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": { "PORT": "8090" }
+    },
+    {
+      "name": "Mnemosyne API (uvicorn, no reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["mnemosyne.api.app:app", "--host", "0.0.0.0", "--port", "8090"],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/mnemosyne/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Mnemosyne tests (pytest)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["mnemosyne/tests", "-v"],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/mnemosyne/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ]
+}

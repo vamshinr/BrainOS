@@ -1,106 +1,61 @@
 "use client";
 
-import { useState } from "react";
-import { ModelPicker } from "@/components/model-picker";
+import { useEffect, useState } from "react";
+import type {
+  RetrieveResult,
+  CausalResult,
+  AssociativeResult,
+  MnemEvent,
+} from "@/lib/mnemosyne";
+import { relationColor } from "@/lib/mnemosyne";
 
-const SUGGESTIONS = [
-  "Who owns the billing service?",
-  "How do we deploy backend to production?",
-  "What gotchas should I know about Stripe webhooks?",
-  "What policies apply to PRs in billing-svc?",
-  "What does P0 mean here?",
-  "When is the Adyen sunset?",
-];
+type Mode = "causal" | "associative";
 
-type Feedback = {
-  confidence: number;
-  grounded: boolean;
-  partial?: boolean;
-  raw_chunk_only?: boolean;
-  supporting_context_ids?: string[];
-  unsupported_claims?: string[];
-  missing_aspects?: string[];
-  contradictions?: string[];
-  feedback: string;
-};
-type RetrievalHit = { id: string; score?: number | null };
-type RetrievalDebug = {
-  retrieval_mode?: string;
-  temporal_intent?: { mode?: string; target_date?: string | null };
-  vector_unit_hits?: RetrievalHit[];
-  vector_chunk_hits?: RetrievalHit[];
-  bm25_hits?: RetrievalHit[];
-  chunk_bm25_hits?: RetrievalHit[];
-  entity_hits?: RetrievalHit[];
-  graph_hits?: RetrievalHit[];
-  final_unit_ids?: string[];
-  final_chunk_ids?: string[];
-};
-type Answer = {
-  question: string;
-  answer: string;
-  draft_answer?: string | null;
-  answer_revised?: boolean;
-  used: string[];
-  retrieved_texts: string[];
-  latency_ms: number | null;
-  retrieval_mode?: string | null;
-  retrieval_debug?: RetrievalDebug | null;
-  feedback: Feedback | null;
-};
-
-function HitList({ label, hits }: { label: string; hits?: RetrievalHit[] }) {
-  const count = hits?.length ?? 0;
-  return (
-    <div className="rounded border bg-[var(--muted)]/20 px-2 py-1.5">
-      <div className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)]">{label}</div>
-      <div className="mt-1 font-mono text-[11px] text-[var(--foreground)]">
-        {count === 0 ? "none" : hits!.slice(0, 4).map((h) => h.id).join(", ")}
-      </div>
-    </div>
-  );
+function fmtTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
 }
 
 export default function AskPage() {
   const [question, setQuestion] = useState("");
+  const [mode, setMode] = useState<Mode>("causal");
   const [loading, setLoading] = useState(false);
-  const [history, setHistory] = useState<Answer[]>([]);
   const [err, setErr] = useState<string | null>(null);
-  const [model, setModel] = useState("");
-  const [timeTravelEnabled, setTimeTravelEnabled] = useState(false);
-  const [asOfDate, setAsOfDate] = useState("");
+  const [result, setResult] = useState<RetrieveResult | null>(null);
 
-  async function ask(q: string) {
+  // Resolve distractor ids -> summaries for display.
+  const [eventsById, setEventsById] = useState<Record<string, MnemEvent>>({});
+  useEffect(() => {
+    fetch("/api/graph")
+      .then((r) => r.json())
+      .then((g: { events?: MnemEvent[] }) => {
+        const map: Record<string, MnemEvent> = {};
+        (g.events ?? []).forEach((e) => (map[e.id] = e));
+        setEventsById(map);
+      })
+      .catch(() => {});
+  }, [result]);
+
+  async function ask(e: React.FormEvent) {
+    e.preventDefault();
+    if (!question.trim()) return;
     setErr(null);
+    setResult(null);
     setLoading(true);
     try {
       const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question: q,
-          model: model || undefined,
-          as_of: timeTravelEnabled && asOfDate ? asOfDate : undefined,
-        }),
+        body: JSON.stringify({ question, mode, k: 8 }),
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
-      setHistory((h) => [
-        {
-          question: q,
-          answer: j.answer,
-          draft_answer: j.draft_answer ?? null,
-          answer_revised: j.answer_revised ?? false,
-          used: j.used ?? [],
-          retrieved_texts: j.retrieved_texts ?? [],
-          latency_ms: j.latency_ms ?? null,
-          retrieval_mode: j.retrieval_mode ?? null,
-          retrieval_debug: j.retrieval_debug ?? null,
-          feedback: j.feedback ?? null,
-        },
-        ...h,
-      ]);
-      setQuestion("");
+      setResult(j as RetrieveResult);
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));
     } finally {
@@ -113,244 +68,183 @@ export default function AskPage() {
       <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
         Ask
       </div>
-      <h1 className="text-3xl font-semibold tracking-tight">Query the brain.</h1>
-      <p className="mt-2 text-[var(--muted-foreground)]">
-        Answers are grounded with hybrid ChromaDB, BM25, raw-source, and graph retrieval.
+      <h1 className="text-3xl font-semibold tracking-tight">Ask why something happened.</h1>
+      <p className="mt-2 text-[var(--muted-foreground)] max-w-xl">
+        <strong>Causal</strong> mode anchors on the event you ask about, walks the cause → effect
+        graph to the root cause and consequences, and explains the chain.{" "}
+        <strong>Associative</strong> mode is the plain semantic-search baseline — kept only to show
+        the difference.
       </p>
 
-      <form
-        onSubmit={(e) => { e.preventDefault(); if (question.trim()) ask(question.trim()); }}
-        className="mt-6 space-y-3"
-      >
-        <div className="flex gap-2">
-          <input
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            placeholder="Ask anything about how the company works…"
-            className="flex-1 rounded-md border bg-[var(--card)] px-3 py-2.5 text-sm"
-            disabled={loading}
-          />
+      <form onSubmit={ask} className="mt-6 space-y-3">
+        <textarea
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          rows={3}
+          placeholder="Why did checkout start throwing 500s?"
+          className="w-full rounded-md border bg-[var(--card)] px-3 py-3 text-sm"
+        />
+        <div className="flex items-center gap-3">
+          <div className="flex gap-1 rounded-lg border bg-[var(--muted)]/30 p-1">
+            {(["causal", "associative"] as Mode[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium capitalize transition-colors ${
+                  mode === m
+                    ? "bg-[var(--foreground)] text-[var(--background)]"
+                    : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                }`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
           <button
             type="submit"
             disabled={loading || !question.trim()}
             className="rounded-md bg-[var(--foreground)] text-[var(--background)] px-4 py-2 text-sm font-medium disabled:opacity-50"
           >
-            {loading ? "Retrieving…" : "Ask"}
+            {loading ? "Thinking…" : "Ask"}
           </button>
-        </div>
-        <div className="max-w-md">
-          <ModelPicker
-            value={model}
-            onChange={setModel}
-            mode="text"
-            label="Answer model (optional override)"
-            hint="affects execute + feedback"
-          />
-        </div>
-
-        {/* Time-travel toggle */}
-        <div className="flex items-start gap-3 pt-1">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={timeTravelEnabled}
-            onClick={() => setTimeTravelEnabled((v) => !v)}
-            className={`relative mt-0.5 inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${
-              timeTravelEnabled ? "bg-[var(--accent)]" : "bg-[var(--muted)]"
-            }`}
-          >
-            <span
-              className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow ring-0 transition-transform ${
-                timeTravelEnabled ? "translate-x-4" : "translate-x-0"
-              }`}
-            />
-          </button>
-          <div>
-            <div className="text-sm font-medium leading-none">Time travel</div>
-            <div className="text-[11px] text-[var(--muted-foreground)] mt-0.5">
-              Query the brain as it was on a specific date
-            </div>
-            {timeTravelEnabled && (
-              <div className="mt-2 flex items-center gap-2">
-                <label className="text-[11px] text-[var(--muted-foreground)]">As of</label>
-                <input
-                  type="date"
-                  value={asOfDate}
-                  onChange={(e) => setAsOfDate(e.target.value)}
-                  max={new Date().toISOString().slice(0, 10)}
-                  className="rounded border bg-[var(--card)] px-2 py-1 text-sm font-mono text-[var(--foreground)]"
-                />
-                {asOfDate && (
-                  <span className="text-[11px] text-[var(--accent)] font-medium">
-                    Retrieving facts valid on {asOfDate}
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
         </div>
       </form>
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        {SUGGESTIONS.map((s) => (
-          <button
-            key={s}
-            onClick={() => ask(s)}
-            disabled={loading}
-            className="text-xs rounded-full border bg-[var(--card)] px-3 py-1 hover:border-[var(--accent)]/40 disabled:opacity-50"
-          >
-            {s}
-          </button>
-        ))}
-      </div>
-
       {err && (
-        <div className="mt-4 rounded-md border border-red-300 bg-red-50 dark:bg-red-950/30 dark:border-red-800 px-4 py-3 text-sm text-red-700 dark:text-red-300">
+        <div className="mt-6 rounded-md border border-red-300 bg-red-50 dark:bg-red-950/30 dark:border-red-800 px-4 py-3 text-sm text-red-700 dark:text-red-300">
           {err}
         </div>
       )}
 
-      <div className="mt-8 space-y-6">
-        {history.map((h, i) => (
-          <div key={i} className="rounded-lg border bg-[var(--card)] px-5 py-4">
-            <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-1">
-              Question
-            </div>
-            <div className="text-sm font-medium">{h.question}</div>
+      {result?.mode === "causal" && <CausalView result={result} eventsById={eventsById} />}
+      {result?.mode === "associative" && <AssociativeView result={result} />}
+    </div>
+  );
+}
 
-            <div className="mt-4 text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-1">
-              Answer
-            </div>
-            <div className="text-sm leading-relaxed whitespace-pre-wrap">{h.answer}</div>
-
-            {/* Metadata row */}
-            <div className="mt-4 flex flex-wrap items-center gap-3 text-[11px] text-[var(--muted-foreground)]">
-              {h.latency_ms !== null && (
-                <span className="rounded bg-[var(--muted)]/40 px-2 py-0.5 font-mono">
-                  {h.latency_ms} ms
-                </span>
-              )}
-              {h.retrieved_texts.length > 0 && (
-                <span>
-                  {h.retrieved_texts.length} context item{h.retrieved_texts.length !== 1 ? "s" : ""} retrieved
-                </span>
-              )}
-              {h.retrieval_mode && (
-                <span className="rounded bg-[var(--muted)]/40 px-2 py-0.5 font-mono">
-                  {h.retrieval_mode}
-                </span>
-              )}
-              {h.feedback && (
-                <span
-                  className={`rounded px-2 py-0.5 ${
-                    h.feedback.grounded
-                      ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
-                      : "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-                  }`}
-                >
-                  {h.feedback.grounded ? "Grounded" : "Ungrounded"} ·{" "}
-                  conf {h.feedback.confidence.toFixed(2)}
-                </span>
-              )}
-              {h.answer_revised && (
-                <span className="rounded bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300 px-2 py-0.5">
-                  revised by verifier
-                </span>
-              )}
-              {h.retrieval_debug?.temporal_intent?.target_date && (
-                <span className="rounded bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300 px-2 py-0.5">
-                  as of {h.retrieval_debug.temporal_intent.target_date}
-                </span>
-              )}
-            </div>
-
-            {h.feedback?.feedback && (
-              <div className="mt-2 text-[11px] text-[var(--muted-foreground)] italic">
-                {h.feedback.feedback}
-              </div>
-            )}
-
-            {h.feedback && (
-              <details className="mt-3">
-                <summary className="text-[11px] text-[var(--muted-foreground)] cursor-pointer hover:text-[var(--foreground)] select-none">
-                  Grounding verification
-                </summary>
-                <div className="mt-2 space-y-1 text-[11px] text-[var(--muted-foreground)]">
-                  <div>supporting context: {(h.feedback.supporting_context_ids ?? []).join(", ") || "none reported"}</div>
-                  <div>partial: {String(h.feedback.partial ?? false)} · raw chunk only: {String(h.feedback.raw_chunk_only ?? false)}</div>
-                  {(h.feedback.unsupported_claims ?? []).length > 0 && (
-                    <div>unsupported: {h.feedback.unsupported_claims!.join(" | ")}</div>
-                  )}
-                  {(h.feedback.missing_aspects ?? []).length > 0 && (
-                    <div>missing: {h.feedback.missing_aspects!.join(" | ")}</div>
-                  )}
-                  {(h.feedback.contradictions ?? []).length > 0 && (
-                    <div>contradictions: {h.feedback.contradictions!.join(" | ")}</div>
-                  )}
-                </div>
-              </details>
-            )}
-
-            {h.answer_revised && h.draft_answer && (
-              <details className="mt-3">
-                <summary className="text-[11px] text-[var(--muted-foreground)] cursor-pointer hover:text-[var(--foreground)] select-none">
-                  Original draft before verifier revision
-                </summary>
-                <div className="mt-2 text-[11px] text-[var(--muted-foreground)] whitespace-pre-wrap">
-                  {h.draft_answer}
-                </div>
-              </details>
-            )}
-
-            {/* Retrieved context — shows exactly what the model was given */}
-            {h.retrieved_texts.length > 0 && (
-              <details className="mt-3">
-                <summary className="text-[11px] text-[var(--muted-foreground)] cursor-pointer hover:text-[var(--foreground)] select-none">
-                  Retrieved context ({h.retrieved_texts.length} items sent to model)
-                </summary>
-                <ol className="mt-2 space-y-1 pl-1">
-                  {h.retrieved_texts.map((t, idx) => (
-                    <li key={idx} className="text-[11px] text-[var(--muted-foreground)] flex gap-2">
-                      <span className="font-mono shrink-0 text-[var(--accent)]">{idx + 1}.</span>
-                      <span>{t}</span>
-                    </li>
-                  ))}
-                </ol>
-              </details>
-            )}
-
-            {h.retrieval_debug && (
-              <details className="mt-3">
-                <summary className="text-[11px] text-[var(--muted-foreground)] cursor-pointer hover:text-[var(--foreground)] select-none">
-                  Retrieval diagnostics
-                </summary>
-                <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <HitList label="Vector units" hits={h.retrieval_debug.vector_unit_hits} />
-                  <HitList label="Vector chunks" hits={h.retrieval_debug.vector_chunk_hits} />
-                  <HitList label="BM25 units" hits={h.retrieval_debug.bm25_hits} />
-                  <HitList label="BM25 chunks" hits={h.retrieval_debug.chunk_bm25_hits} />
-                  <HitList label="Entities" hits={h.retrieval_debug.entity_hits} />
-                  <HitList label="Graph" hits={h.retrieval_debug.graph_hits} />
-                </div>
-                <div className="mt-2 text-[11px] text-[var(--muted-foreground)] font-mono">
-                  final units: {(h.retrieval_debug.final_unit_ids ?? []).join(", ") || "none"}
-                  <br />
-                  final chunks: {(h.retrieval_debug.final_chunk_ids ?? []).join(", ") || "none"}
-                  <br />
-                  temporal: {h.retrieval_debug.temporal_intent?.mode ?? "unknown"}
-                  {h.retrieval_debug.temporal_intent?.target_date ? ` @ ${h.retrieval_debug.temporal_intent.target_date}` : ""}
-                </div>
-              </details>
-            )}
-
-            {h.retrieved_texts.length === 0 && h.used.length === 0 && (
-              <div className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
-                No units retrieved — brain may be empty or query didn&apos;t match any stored knowledge.
-              </div>
-            )}
-          </div>
-        ))}
+function CausalView({
+  result,
+  eventsById,
+}: {
+  result: CausalResult;
+  eventsById: Record<string, MnemEvent>;
+}) {
+  if (!result.chain.length) {
+    return (
+      <div className="mt-6 text-sm text-[var(--muted-foreground)]">
+        No matching events. Ingest some text first.
       </div>
+    );
+  }
+  return (
+    <div className="mt-8 space-y-6">
+      {result.answer && (
+        <div className="rounded-md border bg-[var(--card)] px-4 py-4">
+          <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
+            Why
+          </div>
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">{result.answer}</p>
+        </div>
+      )}
+
+      <div>
+        <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-3">
+          Causal chain · root → outcome
+        </div>
+        <ol className="relative border-l border-[var(--border)] ml-2">
+          {result.chain.map((entry) => {
+            const isAnchor = entry.event.id === result.anchor_event_id;
+            return (
+              <li key={entry.event.id} className="ml-4 pb-5">
+                <div
+                  className="absolute -left-[5px] mt-1.5 h-2.5 w-2.5 rounded-full"
+                  style={{ background: relationColor(entry.incoming_relation) }}
+                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-mono text-[var(--muted-foreground)] tabular-nums">
+                    {fmtTime(entry.event.occurred_at)}
+                  </span>
+                  {entry.incoming_relation ? (
+                    <span
+                      className="rounded px-1.5 py-0.5 text-[10px] font-mono text-white"
+                      style={{ background: relationColor(entry.incoming_relation) }}
+                    >
+                      {entry.incoming_relation} {entry.confidence?.toFixed(2)}
+                    </span>
+                  ) : (
+                    <span className="rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-mono text-[var(--muted-foreground)]">
+                      root cause
+                    </span>
+                  )}
+                  {isAnchor && (
+                    <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] font-mono text-[var(--muted-foreground)]">
+                      ← your query
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 text-sm">{entry.event.summary}</div>
+                {entry.event.tags?.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {entry.event.tags.map((t) => (
+                      <span key={t} className="text-[10px] text-[var(--muted-foreground)] font-mono">
+                        #{t}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+
+      {result.excluded_distractors.length > 0 && (
+        <div className="rounded-md border border-dashed border-[var(--border)] bg-[var(--muted)]/20 px-4 py-3">
+          <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
+            Excluded distractors
+          </div>
+          <p className="text-xs text-[var(--muted-foreground)] mb-2">
+            Keyword-similar events that are <strong>not</strong> on any causal path — associative
+            search would wrongly surface these:
+          </p>
+          <ul className="space-y-1">
+            {result.excluded_distractors.map((id) => (
+              <li key={id} className="text-xs">
+                <span className="line-through decoration-[var(--muted-foreground)]/50">
+                  {eventsById[id]?.summary ?? id}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AssociativeView({ result }: { result: AssociativeResult }) {
+  return (
+    <div className="mt-8">
+      <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
+        Associative baseline · top-{result.chunks.length} by similarity
+      </div>
+      <p className="text-xs text-[var(--muted-foreground)] mb-3">
+        A bag of semantically-similar events, unordered and with no causal structure. Note how
+        keyword-similar distractors creep in.
+      </p>
+      <ul className="space-y-2">
+        {result.chunks.map((c) => (
+          <li key={c.id} className="flex items-start gap-3 rounded-md border bg-[var(--card)] px-3 py-2">
+            <span className="text-xs font-mono text-[var(--muted-foreground)] tabular-nums mt-0.5">
+              {c.score.toFixed(3)}
+            </span>
+            <span className="text-sm">
+              {c.event?.summary ?? (c.payload?.summary as string) ?? c.id}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

@@ -3,13 +3,17 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
+// Mnemosyne ingests raw text and synchronously extracts events + infers causal
+// edges. The legacy {kind,title,url,model} fields are accepted but ignored —
+// only the text and an optional source label matter.
 const Body = z.object({
-  kind: z.enum(["slack", "email", "ticket", "doc", "meeting", "wiki", "code", "other"]),
-  title: z.string().min(1).optional(),
   content: z.string().min(1),
-  url: z.string().url().optional(),
+  title: z.string().optional(),
+  source_id: z.string().optional(),
+  kind: z.string().optional(),
+  url: z.string().optional(),
   model: z.string().optional(),
 });
 
@@ -22,25 +26,21 @@ export async function POST(req: Request) {
   }
 
   try {
-    const backendRes = await fetch(`${BACKEND_URL}/api/ingest`, {
+    const res = await fetch(`${BACKEND_URL}/ingest`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        text: body.content,
+        source_id: body.source_id ?? body.title ?? "ui",
+      }),
     });
-
-    if (!backendRes.ok) {
-      const errText = await backendRes.text();
-      throw new Error(`Backend returned ${backendRes.status}: ${errText}`);
+    if (!res.ok) {
+      throw new Error(`Mnemosyne ${res.status}: ${await res.text()}`);
     }
-
-    // Pass the enqueue response through verbatim — {job_id, status,
-    // queue_position, title}. The actual ingest happens asynchronously on the
-    // backend worker; the QueueDock subscribes to /api/jobs/stream for
-    // progress and triggers cache invalidation when the job finishes.
-    const data = await backendRes.json();
-    return NextResponse.json(data, { status: backendRes.status });
+    // { events_created, events_reinforced, edges_created, counts }
+    return NextResponse.json(await res.json());
   } catch (e) {
-    console.error("Ingest enqueue error:", e);
-    return NextResponse.json({ error: "Backend failed to enqueue", detail: String(e) }, { status: 500 });
+    console.error("Ingest error:", e);
+    return NextResponse.json({ error: "Ingest failed", detail: String(e) }, { status: 500 });
   }
 }

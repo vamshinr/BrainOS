@@ -17,10 +17,11 @@ from dotenv import load_dotenv
 _PKG_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _PKG_DIR.parent
 
+# Single source of config: the root .env (shared with the Next.js frontend).
+# .env.local is honored for local overrides.
 for _env_file in (
-    _PKG_DIR / ".env",
+    _REPO_ROOT / ".env",
     _REPO_ROOT / ".env.local",
-    _REPO_ROOT / "src" / "python_backend" / ".env",
 ):
     if _env_file.exists():
         load_dotenv(_env_file, override=False)

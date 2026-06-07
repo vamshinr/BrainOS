@@ -5,10 +5,11 @@ import { z } from "zod";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
+// Maps the UI's question to Mnemosyne's causal (or associative) retrieval.
 const Body = z.object({
   question: z.string().min(1),
-  model: z.string().optional(),
-  as_of: z.string().optional(),
+  mode: z.enum(["causal", "associative"]).optional(),
+  k: z.number().int().positive().max(50).optional(),
 });
 
 export async function POST(req: Request) {
@@ -20,35 +21,23 @@ export async function POST(req: Request) {
   }
 
   try {
-    const backendRes = await fetch(`${BACKEND_URL}/api/ask`, {
+    const res = await fetch(`${BACKEND_URL}/retrieve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: body.question, model: body.model, as_of: body.as_of }),
+      body: JSON.stringify({
+        query: body.question,
+        mode: body.mode ?? "causal",
+        k: body.k ?? 8,
+      }),
     });
-
-    if (!backendRes.ok) {
-      const errText = await backendRes.text();
-      throw new Error(`Backend returned ${backendRes.status}: ${errText}`);
+    if (!res.ok) {
+      throw new Error(`Mnemosyne ${res.status}: ${await res.text()}`);
     }
-
-    const data = await backendRes.json();
-
-    return NextResponse.json({
-      answer: data.answer,
-      draft_answer: data.draft_answer ?? null,
-      answer_revised: data.answer_revised ?? false,
-      used: data.used ?? [],
-      retrieved_texts: data.retrieved_texts ?? [],
-      latency_ms: data.latency_ms ?? null,
-      retrieval_mode: data.retrieval_mode ?? null,
-      retrieval_debug: data.retrieval_debug ?? null,
-      feedback: data.feedback ?? null,
-    });
+    // causal: { anchor_event_id, chain, answer, excluded_distractors }
+    // associative: { chunks }
+    return NextResponse.json(await res.json());
   } catch (e) {
-    console.error("Agent Backend Error:", e);
-    return NextResponse.json(
-      { error: "Agent Backend failed", detail: String(e) },
-      { status: 500 },
-    );
+    console.error("Retrieve error:", e);
+    return NextResponse.json({ error: "Retrieve failed", detail: String(e) }, { status: 500 });
   }
 }

@@ -1,184 +1,62 @@
-import Link from "next/link";
-import { readState } from "@/lib/store";
-import { GraphView, type SourceTag } from "@/components/graph-view";
-import type { EntityKind } from "@/lib/types";
+"use client";
 
-export const dynamic = "force-dynamic";
+import { useEffect, useState } from "react";
+import type { GraphDump } from "@/lib/mnemosyne";
+import { CausalGraph } from "@/components/causal-graph";
+import { RELATION_COLORS } from "@/lib/mnemosyne";
 
-// Map every source kind to a coarse "where this came from" tag so the map
-// filter is just two buckets the user understands (docs vs slack).
-const DOC_KINDS = new Set(["doc", "pdf", "file", "text", "code", "image"]);
-function sourceTagFromKind(kind: string | undefined): SourceTag | null {
-  if (!kind) return null;
-  if (kind === "slack") return "slack";
-  if (DOC_KINDS.has(kind)) return "doc";
-  return null;
-}
+export default function GraphPage() {
+  const [data, setData] = useState<GraphDump | null>(null);
+  const [loading, setLoading] = useState(true);
 
-export default async function GraphPage() {
-  const state = await readState();
-  const fresh = state.units.filter((u) => !u.stale && !u.supersededBy);
-  const rels = state.relationships ?? [];
+  useEffect(() => {
+    fetch("/api/graph")
+      .then((r) => r.json())
+      .then((d: GraphDump) => setData({ events: d.events ?? [], edges: d.edges ?? [] }))
+      .catch(() => setData({ events: [], edges: [] }))
+      .finally(() => setLoading(false));
+  }, []);
 
-  // Index sources by id so we can resolve evidence → source kind cheaply.
-  const sourceKindById = new Map<string, string>();
-  for (const s of state.sources) sourceKindById.set(s.id, s.kind);
-
-  // Build entity index with ref counts AND the set of source tags that
-  // contributed to it (via the units it appears in, which carry evidence
-  // pointing at sources, which know their kind).
-  const entityIndex = new Map<
-    string,
-    { kind: EntityKind; refCount: number; sources: Set<SourceTag> }
-  >();
-  for (const e of state.entities) {
-    entityIndex.set(e.name.toLowerCase(), {
-      kind: e.kind,
-      refCount: 0,
-      sources: new Set<SourceTag>(),
-    });
-  }
-  for (const u of fresh) {
-    const unitTags = new Set<SourceTag>();
-    for (const ev of u.evidence ?? []) {
-      if (!ev?.sourceId) continue;
-      const tag = sourceTagFromKind(sourceKindById.get(ev.sourceId));
-      if (tag) unitTags.add(tag);
-    }
-    for (const name of u.entities) {
-      const k = name.toLowerCase();
-      const cur = entityIndex.get(k);
-      if (cur) {
-        cur.refCount += 1;
-        unitTags.forEach((t) => cur.sources.add(t));
-      } else {
-        entityIndex.set(k, {
-          kind: "concept",
-          refCount: 1,
-          sources: new Set<SourceTag>(unitTags),
-        });
-      }
-    }
-  }
-
-  const nodes = Array.from(entityIndex.entries()).map(([name, info]) => ({
-    name: state.entities.find((e) => e.name.toLowerCase() === name)?.name ?? name,
-    kind: info.kind,
-    refCount: info.refCount,
-    sources: Array.from(info.sources) as SourceTag[],
-  }));
-
-  // Prefer explicit relationships; fall back to co-mention edges
-  const explicitEdges = rels.map((r) => ({
-    a: r.from,
-    b: r.to,
-    label: r.relation,
-    weight: Math.round(r.confidence * 3),
-  }));
-
-  const coMentionMap = new Map<string, { a: string; b: string; weight: number }>();
-  if (explicitEdges.length === 0) {
-    for (const u of fresh) {
-      const names = Array.from(new Set(u.entities.map((n) => n.toLowerCase())));
-      for (let i = 0; i < names.length; i++) {
-        for (let j = i + 1; j < names.length; j++) {
-          const [a, b] = [names[i], names[j]].sort();
-          const key = `${a}\0${b}`;
-          const cur = coMentionMap.get(key);
-          if (cur) cur.weight += 1;
-          else coMentionMap.set(key, { a, b, weight: 1 });
-        }
-      }
-    }
-  }
-
-  const edges =
-    explicitEdges.length > 0
-      ? explicitEdges
-      : Array.from(coMentionMap.values()).map((e) => ({ ...e, label: undefined }));
+  const events = data?.events ?? [];
+  const edges = data?.edges ?? [];
 
   return (
-    <div className="px-8 py-8">
-      {/* Header */}
-      <div className="max-w-4xl mb-6">
-        <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">Map</div>
-        <div className="flex items-end justify-between gap-4 flex-wrap">
-          <h1 className="text-3xl font-semibold tracking-tight">Company knowledge graph.</h1>
-          <div className="flex items-center gap-3 text-[11px] text-[var(--muted-foreground)] pb-1">
-            <span className="rounded bg-[var(--muted)]/40 px-2 py-1 font-mono">
-              {nodes.length} entities
+    <div className="px-4 sm:px-6 md:px-10 py-6 md:py-10">
+      <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
+        Map
+      </div>
+      <h1 className="text-3xl font-semibold tracking-tight">Causal graph</h1>
+      <p className="mt-2 text-[var(--muted-foreground)] max-w-xl">
+        Every ingested event placed on a time axis, linked by the inferred cause → effect edges.
+        Hover an event to isolate what it caused and what caused it.
+      </p>
+
+      <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-[var(--muted-foreground)]">
+        <span className="font-mono tabular-nums">
+          {events.length} events · {edges.length} edges
+        </span>
+        <span className="flex flex-wrap gap-3">
+          {Object.entries(RELATION_COLORS).map(([rel, color]) => (
+            <span key={rel} className="flex items-center gap-1">
+              <span className="inline-block h-2 w-3 rounded-sm" style={{ background: color }} />
+              {rel}
             </span>
-            <span className="rounded bg-[var(--muted)]/40 px-2 py-1 font-mono">
-              {edges.length} {rels.length > 0 ? "relationships" : "co-mentions"}
-            </span>
-            {rels.length > 0 && (
-              <span className="rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300 px-2 py-1">
-                directed graph
-              </span>
-            )}
-          </div>
-        </div>
-        <p className="mt-2 text-[var(--muted-foreground)]">
-          {rels.length > 0
-            ? "Explicit directed relationships extracted from ingested content — who owns what, what depends on what, who reports to whom. Click any node to inspect its connections. Use fullscreen (⤢) for the full map."
-            : "Entities co-mentioned in knowledge units. Ingest more content to build explicit directed relationships."}
-        </p>
+          ))}
+        </span>
       </div>
 
-      {/* Graph canvas — full width */}
-      {nodes.length === 0 ? (
-        <div className="rounded-lg border border-dashed bg-[var(--muted)]/20 px-6 py-16 text-center text-sm text-[var(--muted-foreground)]">
-          No entities yet.{" "}
-          <Link href="/ingest" className="underline hover:text-[var(--foreground)]">
-            Ingest something
-          </Link>{" "}
-          to build the map.
-        </div>
-      ) : (
-        <GraphView nodes={nodes} edges={edges} hasExplicitRels={rels.length > 0} />
-      )}
-
-      {/* Relationship index table */}
-      {rels.length > 0 && (
-        <section className="mt-8 max-w-4xl">
-          <h2 className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-3">
-            Relationship index
-          </h2>
-          <div className="rounded-lg border bg-[var(--card)] overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-[var(--muted)]/30 text-[10px] uppercase tracking-widest text-[var(--muted-foreground)]">
-                  <th className="text-left px-4 py-2.5">From</th>
-                  <th className="text-left px-4 py-2.5">Relation</th>
-                  <th className="text-left px-4 py-2.5">To</th>
-                  <th className="text-right px-4 py-2.5">Conf</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rels.slice(0, 60).map((r) => (
-                  <tr key={r.id} className="border-b last:border-0 hover:bg-[var(--muted)]/20 transition-colors">
-                    <td className="px-4 py-2 font-medium">{r.from}</td>
-                    <td className="px-4 py-2">
-                      <span className="font-mono text-[var(--accent)] text-[11px] bg-[var(--accent)]/10 rounded px-1.5 py-0.5">
-                        {r.relation}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2 font-medium">{r.to}</td>
-                    <td className="px-4 py-2 text-right font-mono text-[11px] text-[var(--muted-foreground)]">
-                      {r.confidence.toFixed(2)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {rels.length > 60 && (
-              <div className="px-4 py-2 text-[11px] text-[var(--muted-foreground)] border-t">
-                Showing 60 of {rels.length} relationships
-              </div>
-            )}
+      <div className="mt-5">
+        {loading ? (
+          <div className="text-sm text-[var(--muted-foreground)]">Loading…</div>
+        ) : events.length === 0 ? (
+          <div className="rounded-md border border-dashed border-[var(--border)] bg-[var(--muted)]/20 px-6 py-12 text-center text-sm text-[var(--muted-foreground)]">
+            No events yet. <a className="underline" href="/ingest">Ingest some text</a> to build the
+            causal graph.
           </div>
-        </section>
-      )}
+        ) : (
+          <CausalGraph data={{ events, edges }} />
+        )}
+      </div>
     </div>
   );
 }
