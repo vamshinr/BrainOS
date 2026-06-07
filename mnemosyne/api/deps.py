@@ -57,3 +57,22 @@ def reset_service() -> None:
         except Exception:  # noqa: BLE001
             pass
     _service = None
+
+
+from ..jobs.manager import JobManager  # noqa: E402
+
+_job_manager: Optional[JobManager] = None
+
+
+def get_job_manager() -> JobManager:
+    global _job_manager
+    if _job_manager is None:
+        s = get_settings()
+
+        def ingest_fn(text: str, source_id: str, on_progress) -> object:
+            return get_service().ingest(text, source_id=source_id, on_progress=on_progress)
+
+        _job_manager = JobManager(
+            ingest_fn, workers=s.job_workers, recent_limit=s.job_recent_limit
+        )
+    return _job_manager

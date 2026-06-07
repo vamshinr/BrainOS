@@ -20,6 +20,10 @@ from .schemas import IngestRequest, ManualEdgeRequest, RetrieveRequest
 
 app = FastAPI(title="Mnemosyne — Causal Memory Engine", version=__version__)
 
+from .jobs_routes import router as jobs_router  # noqa: E402
+
+app.include_router(jobs_router)
+
 
 def _service() -> MnemosyneService:
     try:

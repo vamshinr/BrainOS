@@ -28,3 +28,10 @@ class ManualEdgeRequest(BaseModel):
     relation: str = "caused"
     confidence: float = 1.0
     evidence: str = "manual"
+
+
+class JobIngestRequest(BaseModel):
+    text: str = Field(..., min_length=1, description="raw text to ingest asynchronously")
+    source_id: str = Field("", description="which document/session this came from")
+    title: str = Field("", description="label shown in the queue dock")
+    kind: str = Field("ingest_text", description="ingest_text | ingest_file")
