@@ -3,6 +3,7 @@
   "configurations": [
     {
       "name": "Mnemosyne API (debug)",
+      "preLaunchTask": "start-stores",
       "type": "debugpy",
       "request": "launch",
       "module": "mnemosyne",

@@ -1,0 +1,17 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "start-stores",
+      "detail": "Start Neo4j + Qdrant (idempotent) before debugging the backend",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/start-stores.sh",
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}
