@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
 
 type JobStatus = "queued" | "running" | "completed" | "failed" | "canceled";
 type JobKind = "ingest_text" | "ingest_file" | string;
@@ -20,7 +19,7 @@ interface Job {
 }
 
 interface Snapshot {
-  active: Job | null;
+  active: Job[];
   queued: Job[];
   recent: Job[];
 }
@@ -28,7 +27,6 @@ interface Snapshot {
 const KIND_LABEL: Record<string, string> = {
   ingest_text: "text",
   ingest_file: "file",
-  slack_realtime: "Slack",
 };
 
 const STATUS_DOT: Record<JobStatus, string> = {
@@ -39,70 +37,37 @@ const STATUS_DOT: Record<JobStatus, string> = {
   canceled: "bg-zinc-500",
 };
 
+const EMPTY: Snapshot = { active: [], queued: [], recent: [] };
+
 export function QueueDock() {
-  const [snap, setSnap] = useState<Snapshot>({
-    active: null,
-    queued: [],
-    recent: [],
-  });
+  const [snap, setSnap] = useState<Snapshot>(EMPTY);
   const [open, setOpen] = useState(false);
   const [connected, setConnected] = useState(false);
-  const router = useRouter();
   const lastFinishedAt = useRef<string | null>(null);
 
-  // Trigger a server-side cache invalidate + router refresh. Marked by the
-  // job's finishedAt so the same finish never invalidates twice.
-  const onJobFinished = useCallback((finishedAt: string | null) => {
-    if (!finishedAt || finishedAt === lastFinishedAt.current) return;
-    lastFinishedAt.current = finishedAt;
-    fetch("/api/cache/invalidate", { method: "POST" })
-      .catch(() => {})
-      .finally(() => router.refresh());
-  }, [router]);
-
-  // Apply a single SSE event to the snapshot. Server sends snapshot resets
-  // and per-job deltas; we mutate the local state accordingly.
-  const applyEvent = useCallback((data: { event: string; snapshot?: Snapshot; job?: Job }) => {
-    if (data.event === "snapshot" && data.snapshot) {
-      setSnap(data.snapshot);
-      // Defensive: if the stream reconnected after a disconnect, we may have
-      // missed the live job.finished event. Invalidate using the most-recent
-      // finished job from the snapshot — onJobFinished deduplicates by id.
-      const newest = data.snapshot.recent.find((j) => j.status === "completed" || j.status === "failed");
-      if (newest?.finishedAt) onJobFinished(newest.finishedAt);
-      return;
-    }
-    if (!data.job) return;
-    const job = data.job;
-    setSnap((prev) => {
-      const queued = prev.queued.filter((j) => j.id !== job.id);
-      const recent = prev.recent.filter((j) => j.id !== job.id);
-      let active = prev.active && prev.active.id === job.id ? job : prev.active;
-
-      if (job.status === "queued") {
-        queued.push(job);
-      } else if (job.status === "running") {
-        active = job;
-      } else {
-        // completed / failed / canceled
-        recent.unshift(job);
-        if (active && active.id === job.id) active = null;
-      }
-      return { active, queued, recent: recent.slice(0, 20) };
-    });
-
-    // When a job finishes, brain.json has new content but Next.js's
-    // unstable_cache still serves the old snapshot. Bust it server-side, then
-    // refresh the route so /, /graph, /skills, etc. re-render with fresh data.
-    if (job.status === "completed" || job.status === "failed") {
-      onJobFinished(job.finishedAt);
-    }
-  }, [onJobFinished]);
+  // When a job finishes, tell interested pages (home, /graph) to re-fetch.
+  // Deduplicated by the newest finishedAt so the same finish never fires twice.
+  const notifyFinished = useCallback((snapshot: Snapshot) => {
+    const newest = snapshot.recent.find(
+      (j) => j.status === "completed" || j.status === "failed",
+    );
+    const at = newest?.finishedAt ?? null;
+    if (!at || at === lastFinishedAt.current) return;
+    lastFinishedAt.current = at;
+    window.dispatchEvent(new CustomEvent("mnemosyne:ingested"));
+  }, []);
 
   useEffect(() => {
     let es: EventSource | null = null;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const apply = (data: { event?: string; snapshot?: Snapshot }) => {
+      if (data.snapshot) {
+        setSnap(data.snapshot);
+        notifyFinished(data.snapshot);
+      }
+    };
 
     const connect = () => {
       if (cancelled) return;
@@ -110,9 +75,9 @@ export function QueueDock() {
       es.onopen = () => setConnected(true);
       es.onmessage = (ev) => {
         try {
-          applyEvent(JSON.parse(ev.data));
+          apply(JSON.parse(ev.data));
         } catch {
-          // ignore malformed frames (e.g. heartbeats)
+          /* ignore heartbeats / malformed frames */
         }
       };
       es.onerror = () => {
@@ -122,10 +87,9 @@ export function QueueDock() {
       };
     };
 
-    // Seed with snapshot in case SSE is slow to open.
     fetch("/api/jobs", { cache: "no-store" })
       .then((r) => r.json())
-      .then((s) => !cancelled && setSnap(s))
+      .then((s: Snapshot) => !cancelled && setSnap(s))
       .catch(() => {});
 
     connect();
@@ -134,20 +98,20 @@ export function QueueDock() {
       if (retryTimer) clearTimeout(retryTimer);
       es?.close();
     };
-  }, [applyEvent]);
+  }, [notifyFinished]);
 
   const { active, queued, recent } = snap;
-  const idle = !active && queued.length === 0;
+  const idle = active.length === 0 && queued.length === 0;
 
-  // Cancel a queued (not yet running) job
   const cancel = async (id: string) => {
     try {
       await fetch(`/api/jobs/${id}`, { method: "DELETE" });
-    } catch {}
+    } catch {
+      /* best effort */
+    }
   };
 
-  // When idle and collapsed, render a small floating badge instead of the full
-  // 320px card so the dock doesn't obscure page content. Click to expand.
+  // Idle + collapsed → small floating badge.
   if (idle && !open) {
     return (
       <button
@@ -156,9 +120,7 @@ export function QueueDock() {
         title={connected ? "Queue · idle (click for history)" : "Queue · disconnected"}
         aria-label="Open queue"
       >
-        <span
-          className={`size-2.5 rounded-full ${connected ? "bg-emerald-500" : "bg-zinc-400"}`}
-        />
+        <span className={`size-2.5 rounded-full ${connected ? "bg-emerald-500" : "bg-zinc-400"}`} />
         {recent.length > 0 && (
           <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[var(--muted)] text-[10px] font-mono leading-none flex items-center justify-center text-[var(--muted-foreground)] group-hover:bg-[var(--accent)]/15 group-hover:text-[var(--accent)] transition-colors">
             {recent.length > 99 ? "99+" : recent.length}
@@ -168,47 +130,41 @@ export function QueueDock() {
     );
   }
 
+  const headerLabel =
+    active.length === 1
+      ? `Processing · ${KIND_LABEL[active[0].kind] ?? active[0].kind}`
+      : active.length > 1
+        ? "Processing"
+        : queued.length > 0
+          ? "Queued"
+          : "Queue";
+  const headerTitle =
+    active.length === 1
+      ? active[0].title
+      : active.length > 1
+        ? `${active.length} running`
+        : queued.length > 0
+          ? `${queued.length} waiting`
+          : "Idle";
+
   return (
     <div className="fixed bottom-4 right-4 z-50 w-[320px]">
       <div className="rounded-lg border bg-[var(--card)] shadow-lg overflow-hidden">
-        {/* Header — clickable to toggle */}
         <button
           onClick={() => setOpen((o) => !o)}
           className="w-full flex items-center gap-2.5 px-3.5 py-2.5 hover:bg-[var(--muted)]/40 transition-colors text-left"
         >
           <span
             className={`size-2 rounded-full shrink-0 ${
-              active ? STATUS_DOT.running : connected ? "bg-emerald-500" : "bg-zinc-400"
+              active.length > 0 ? STATUS_DOT.running : connected ? "bg-emerald-500" : "bg-zinc-400"
             }`}
             title={connected ? "live" : "disconnected"}
           />
           <div className="flex-1 min-w-0">
-            {active ? (
-              <>
-                <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
-                  Processing · {KIND_LABEL[active.kind] ?? active.kind}
-                </div>
-                <div className="text-sm font-medium truncate">{active.title}</div>
-              </>
-            ) : queued.length > 0 ? (
-              <>
-                <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
-                  Queued
-                </div>
-                <div className="text-sm font-medium truncate">
-                  {queued.length} waiting
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
-                  Queue
-                </div>
-                <div className="text-sm font-medium truncate text-[var(--muted-foreground)]">
-                  Idle
-                </div>
-              </>
-            )}
+            <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)]">
+              {headerLabel}
+            </div>
+            <div className="text-sm font-medium truncate">{headerTitle}</div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             {queued.length > 0 && (
@@ -216,47 +172,40 @@ export function QueueDock() {
                 +{queued.length}
               </span>
             )}
-            <span
-              className={`text-[var(--muted-foreground)] transition-transform ${
-                open ? "rotate-180" : ""
-              }`}
-            >
+            <span className={`text-[var(--muted-foreground)] transition-transform ${open ? "rotate-180" : ""}`}>
               ⌃
             </span>
           </div>
         </button>
 
-        {/* Active progress bar — always visible when something is running */}
-        {active && (
-          <div className="px-3.5 pb-2">
+        {/* Per-active progress bars, always visible */}
+        {active.map((job) => (
+          <div key={job.id} className="px-3.5 pb-2">
+            {active.length > 1 && (
+              <div className="text-[11px] text-[var(--muted-foreground)] truncate mb-1">{job.title}</div>
+            )}
             <div className="h-1 rounded-full bg-[var(--muted)] overflow-hidden">
               <div
                 className="h-full bg-[var(--accent)] transition-all"
-                style={{ width: `${Math.max(4, Math.round(active.progress * 100))}%` }}
+                style={{ width: `${Math.max(4, Math.round(job.progress * 100))}%` }}
               />
             </div>
-            {active.step && (
-              <div className="mt-1.5 text-[11px] text-[var(--muted-foreground)] truncate">
-                {active.step}
-              </div>
+            {job.step && (
+              <div className="mt-1.5 text-[11px] text-[var(--muted-foreground)] truncate">{job.step}</div>
             )}
           </div>
-        )}
+        ))}
 
-        {/* Expanded panel — queued + recent */}
         {open && (
           <div className="border-t bg-[var(--background)]/60 max-h-[60vh] overflow-y-auto">
-            {!idle && queued.length > 0 && (
+            {queued.length > 0 && (
               <div className="px-3.5 py-2.5">
                 <div className="text-[10px] uppercase tracking-widest text-[var(--muted-foreground)] mb-1.5">
                   Queued
                 </div>
                 <ul className="space-y-1">
                   {queued.map((j, i) => (
-                    <li
-                      key={j.id}
-                      className="flex items-center gap-2 text-xs group"
-                    >
+                    <li key={j.id} className="flex items-center gap-2 text-xs group">
                       <span className="font-mono text-[10px] text-[var(--muted-foreground)] w-4 text-right">
                         {i + 1}
                       </span>
@@ -288,10 +237,7 @@ export function QueueDock() {
                   {recent.slice(0, 8).map((j) => (
                     <li key={j.id} className="flex items-center gap-2 text-xs">
                       <span className={`size-1.5 rounded-full shrink-0 ${STATUS_DOT[j.status]}`} />
-                      <span
-                        className="flex-1 truncate"
-                        title={j.error ?? undefined}
-                      >
+                      <span className="flex-1 truncate" title={j.error ?? undefined}>
                         {j.title}
                       </span>
                       <span className="text-[10px] text-[var(--muted-foreground)] uppercase tracking-wide">
