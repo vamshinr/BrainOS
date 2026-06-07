@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { GraphDump } from "@/lib/mnemosyne";
 import { CausalGraph } from "@/components/causal-graph";
 import { RELATION_COLORS } from "@/lib/mnemosyne";
@@ -9,13 +9,20 @@ export default function GraphPage() {
   const [data, setData] = useState<GraphDump | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     fetch("/api/graph")
       .then((r) => r.json())
       .then((d: GraphDump) => setData({ events: d.events ?? [], edges: d.edges ?? [] }))
       .catch(() => setData({ events: [], edges: [] }))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    load();
+    const onIngested = () => load();
+    window.addEventListener("mnemosyne:ingested", onIngested);
+    return () => window.removeEventListener("mnemosyne:ingested", onIngested);
+  }, [load]);
 
   const events = data?.events ?? [];
   const edges = data?.edges ?? [];

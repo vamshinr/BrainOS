@@ -29,7 +29,12 @@ export default function Home() {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    const onIngested = () => load();
+    window.addEventListener("mnemosyne:ingested", onIngested);
+    return () => window.removeEventListener("mnemosyne:ingested", onIngested);
+  }, [load]);
 
   async function doReset() {
     setResetting(true);
