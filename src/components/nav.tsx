@@ -19,36 +19,9 @@ const BASE_NAV: NavItem[] = [
   // { href: "/slack", label: "Slack", hint: "MCP integration" },
 ];
 
-const ONBOARD_NAV: NavItem = {
-  href: "/welcome",
-  label: "Onboard",
-  hint: "Customer setup wizard",
-};
-
 export function Nav() {
   const [open, setOpen] = useState(false);
-  const [onboarded, setOnboarded] = useState<boolean | null>(null);
   const pathname = usePathname();
-
-  // Poll the onboarding state so the "Onboard" tab disappears once the user
-  // finishes the wizard, and reappears if they reset it via Settings.
-  useEffect(() => {
-    let cancelled = false;
-    const load = () => {
-      fetch("/api/onboarding/state", { cache: "no-store" })
-        .then((r) => r.json())
-        .then((d) => {
-          if (!cancelled) setOnboarded(!!d.complete);
-        })
-        .catch(() => {});
-    };
-    load();
-    const id = setInterval(load, 10_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
 
   useEffect(() => {
     queueMicrotask(() => setOpen(false));
@@ -66,9 +39,7 @@ export function Nav() {
     };
   }, [open]);
 
-  // Build the visible nav: hide "Onboard" once onboarding is complete.
-  // Default to hiding during initial load to avoid a flash for completed users.
-  const navItems: NavItem[] = onboarded === false ? [BASE_NAV[0], ONBOARD_NAV, ...BASE_NAV.slice(1)] : BASE_NAV;
+  const navItems: NavItem[] = BASE_NAV;
 
   return (
     <>

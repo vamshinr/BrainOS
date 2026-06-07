@@ -66,18 +66,8 @@ export default function WelcomePage() {
     };
   }, [router]);
 
-  // Periodic state refresh while in the wizard so step badges reflect
-  // server-side progress (e.g., uploads finishing in the background).
-  useEffect(() => {
-    if (step === "welcome") return;
-    const id = setInterval(() => {
-      fetch("/api/onboarding/state", { cache: "no-store" })
-        .then((r) => r.json())
-        .then((d) => setState(d))
-        .catch(() => {});
-    }, 3000);
-    return () => clearInterval(id);
-  }, [step]);
+  // No periodic polling: onboarding state is served statically (the Mnemosyne
+  // backend has no /api/onboarding/* endpoints), so there is nothing to refresh.
 
   const stepIndex = STEP_ORDER.indexOf(step);
 
