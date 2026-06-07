@@ -1,0 +1,137 @@
+{
+  "info": {
+    "name": "Mnemosyne — Causal Memory Engine",
+    "description": "Backend API for the Mnemosyne causal memory engine.\n\nSet the `baseUrl` collection variable (default http://localhost:8090). Suggested flow: **Ingest** → **Graph** (these auto-populate `eventId` / `causeId` / `effectId`) → **Event by id** / **Edge**.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8090" },
+    { "key": "eventId", "value": "" },
+    { "key": "causeId", "value": "" },
+    { "key": "effectId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] },
+        "description": "Liveness + which stores are connected (Neo4j, Qdrant, LLM)."
+      }
+    },
+    {
+      "name": "Ingest",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "if (d.events_created && d.events_created.length) {",
+              "  pm.collectionVariables.set('eventId', d.events_created[0]);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"text\": \"At 14:02 an engineer changed the cache TTL from 3600s to 30s. At 14:08 the cache hit-rate collapsed because entries expired almost immediately. At 14:14 the DB connection pool saturated as a result of the cache misses. At 14:19 checkout started throwing HTTP 500 errors, triggered by the saturated DB pool. At 14:41 the change was rolled back. At 14:55 checkout recovered.\",\n  \"source_id\": \"incident-demo\"\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/ingest", "host": ["{{baseUrl}}"], "path": ["ingest"] },
+        "description": "Extract timestamped events and infer causal edges from raw text (synchronous). Large text is auto-chunked. Returns events_created / events_reinforced / edges_created / counts."
+      }
+    },
+    {
+      "name": "Retrieve (causal)",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"query\": \"Why did checkout start throwing 500s?\",\n  \"mode\": \"causal\",\n  \"k\": 8\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/retrieve", "host": ["{{baseUrl}}"], "path": ["retrieve"] },
+        "description": "Anchor on the query event, walk the cause→effect graph, and return the ordered chain + a 'why' narrative + excluded_distractors."
+      }
+    },
+    {
+      "name": "Retrieve (associative)",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"query\": \"Why did checkout start throwing 500s?\",\n  \"mode\": \"associative\",\n  \"k\": 5\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/retrieve", "host": ["{{baseUrl}}"], "path": ["retrieve"] },
+        "description": "Plain semantic-search baseline — a bag of similar chunks, unordered. For contrast with causal mode."
+      }
+    },
+    {
+      "name": "Graph",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const d = pm.response.json();",
+              "if (d.events && d.events.length) {",
+              "  pm.collectionVariables.set('eventId', d.events[0].id);",
+              "  pm.collectionVariables.set('causeId', d.events[0].id);",
+              "  pm.collectionVariables.set('effectId', d.events[d.events.length - 1].id);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{baseUrl}}/graph", "host": ["{{baseUrl}}"], "path": ["graph"] },
+        "description": "Dump all events + causal edges. Saves the first/last event ids into collection variables for the next requests."
+      }
+    },
+    {
+      "name": "Event by id",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": { "raw": "{{baseUrl}}/event/{{eventId}}", "host": ["{{baseUrl}}"], "path": ["event", "{{eventId}}"] },
+        "description": "Inspect a single event + its incoming/outgoing edges. Run Ingest or Graph first to populate {{eventId}}."
+      }
+    },
+    {
+      "name": "Edge (manual)",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "options": { "raw": { "language": "json" } },
+          "raw": "{\n  \"cause_id\": \"{{causeId}}\",\n  \"effect_id\": \"{{effectId}}\",\n  \"relation\": \"caused\",\n  \"confidence\": 1.0,\n  \"evidence\": \"manual\"\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/edge", "host": ["{{baseUrl}}"], "path": ["edge"] },
+        "description": "Operator-asserted edge. Returns 422 if the cause occurs after the effect (causality invariant). Run Graph first to populate causeId/effectId."
+      }
+    },
+    {
+      "name": "Reset (destructive)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": { "raw": "{{baseUrl}}/reset", "host": ["{{baseUrl}}"], "path": ["reset"] },
+        "description": "Clears ALL events + edges from Neo4j + Qdrant. Returns the cleared counts."
+      }
+    }
+  ]
+}

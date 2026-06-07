@@ -74,6 +74,7 @@ class MnemosyneService:
             reference_time=ref,
             llm=self.llm,
             embedder=self.embedder,
+            settings=self.settings,
         )
 
         created: list[Event] = []

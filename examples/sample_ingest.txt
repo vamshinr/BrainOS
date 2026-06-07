@@ -1,0 +1,49 @@
+# ------------------------------------------------------------
+# SOURCE 1 — #incidents Slack thread (today, 2026-06-04)
+# ------------------------------------------------------------
+
+[2026-06-04 14:02] @priya: Heads up, I just merged PR #482 to prod. It changes the
+session-service cache TTL from 3600s down to 30s. Small config tweak, should be harmless.
+
+[2026-06-04 14:09] @dawit: Uh, something's off. Session-cache hit rate just fell off a
+cliff — we were at 94% and we're now at 11% over the last six minutes. Because the TTL is
+so short now, basically nothing is staying cached. Origin DB load has tripled.
+
+[2026-06-04 14:15] @dawit: This is cascading. The primary Postgres connection pool is
+saturated — 100 out of 100 connections in use, new queries are queueing. The cache
+collapse is driving every read straight to the DB, which is why the pool maxed out.
+
+[2026-06-04 14:19] @oncall-bot: 🚨 PagerDuty: Checkout API p99 latency 9.4s, error rate
+38% (HTTP 500s). The DB pool saturation means checkout queries are timing out, which is
+causing the 500s. Customers are affected.
+
+[2026-06-04 14:41] @priya: Rolling back PR #482 now. Restoring cache TTL to 3600s. The
+config change was the trigger, so reverting it should let the cache repopulate.
+
+[2026-06-04 14:55] @dawit: Confirmed recovery. Hit rate back to 92%, checkout error rate
+under 1%, p99 normal. As a result of the rollback everything's healthy again. Closing the
+incident.
+
+
+# ------------------------------------------------------------
+# SOURCE 2 — DISTRACTOR: nightly cron note (3 weeks ago, 2026-05-14)
+# ------------------------------------------------------------
+# Shares heavy keyword overlap: "cache", "hit rate", "config", "latency".
+# But it is NOT causally related to the 2026-06-04 incident.
+
+[2026-05-14 02:00] ops-note: Nightly cache-warming job ran successfully. The warming
+config pre-populates the session cache so morning traffic sees a high hit rate from the
+start. Average hit rate after warming: 96%. No latency regressions observed. This job has
+nothing to do with TTL settings; it just pre-fills keys.
+
+
+# ------------------------------------------------------------
+# SOURCE 3 — DISTRACTOR: old design doc excerpt (4 months ago, 2026-02-10)
+# ------------------------------------------------------------
+# Shares keyword overlap: "checkout", "latency".
+# Again, NOT causally related to the incident.
+
+[2026-02-10 11:00] design-doc: Q1 Checkout Redesign — Goals. We want to reduce perceived
+checkout latency by lazy-loading the order summary and deferring non-critical API calls.
+Target: shave 400ms off the checkout render path. This is a UX project; no backend caching
+or database pooling changes are in scope.

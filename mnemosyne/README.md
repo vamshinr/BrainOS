@@ -28,7 +28,9 @@ no in-memory stub).
 
 ### Pipeline (`pipeline/`)
 - **Stage A — `extraction.py`** — LLM extracts discrete timestamped events (resolving
-  relative times), each embedded and written to Neo4j + Qdrant.
+  relative times), each embedded and written to Neo4j + Qdrant. Large inputs are
+  optionally chunked with a sliding-context window so the call never overflows or
+  truncates (`CHUNK_*` / `EXTRACTION_MAX_TOKENS` env vars; small text stays a single call).
 - **Stage B — `causal.py`** — three-signal causal inference:
   `confidence = 0.3·temporal + 0.2·linguistic + 0.5·llm`. Temporal precedence prunes
   candidates cheaply; causality (`cause.occurred_at ≤ effect.occurred_at`) is a hard

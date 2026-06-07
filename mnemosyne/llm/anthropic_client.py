@@ -22,12 +22,14 @@ class AnthropicLLM:
         *,
         extraction_model: str,
         judgment_model: str,
+        extraction_max_tokens: int = 4096,
     ) -> None:
         if not api_key:
             raise ValueError("AnthropicLLM requires an API key (ANTHROPIC_API_KEY / CLAUDE_API_KEY)")
         self._client = anthropic.Anthropic(api_key=api_key)
         self._extraction_model = extraction_model
         self._judgment_model = judgment_model
+        self._extraction_max_tokens = extraction_max_tokens
 
     def _tool_call(
         self, model: str, system: str, user: str, tool: dict, max_tokens: int = 2048
@@ -45,13 +47,25 @@ class AnthropicLLM:
                 return dict(block.input)
         raise ValueError(f"LLM returned no tool_use block for tool {tool['name']}")
 
-    def extract_events(self, text: str, reference_time: datetime) -> list[dict[str, Any]]:
-        user = (
-            f"Reference time (treat as 'now'): {reference_time.isoformat()}\n\n"
-            f"Text to extract events from:\n---\n{text}\n---"
-        )
+    def extract_events(
+        self, text: str, reference_time: datetime, context: str = ""
+    ) -> list[dict[str, Any]]:
+        header = f"Reference time (treat as 'now'): {reference_time.isoformat()}"
+        if context:
+            user = (
+                f"{header}\n\n"
+                "=== CONTEXT FROM PRECEDING TEXT (for reference only — do NOT extract events "
+                f"from this section) ===\n{context}\n\n"
+                f"=== EXTRACT EVENTS FROM THIS SECTION ONLY ===\n{text}\n---"
+            )
+        else:
+            user = f"{header}\n\nText to extract events from:\n---\n{text}\n---"
         out = self._tool_call(
-            self._extraction_model, prompts.EXTRACTION_SYSTEM, user, prompts.EXTRACTION_TOOL
+            self._extraction_model,
+            prompts.EXTRACTION_SYSTEM,
+            user,
+            prompts.EXTRACTION_TOOL,
+            max_tokens=self._extraction_max_tokens,
         )
         events = out.get("events", [])
         return events if isinstance(events, list) else []

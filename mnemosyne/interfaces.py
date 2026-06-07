@@ -87,8 +87,12 @@ class GraphStore(Protocol):
 
 @runtime_checkable
 class LLMClient(Protocol):
-    def extract_events(self, text: str, reference_time: datetime) -> list[dict[str, Any]]:
-        """Stage A: return a list of dicts with keys summary/detail/occurred_at/tags."""
+    def extract_events(
+        self, text: str, reference_time: datetime, context: str = ""
+    ) -> list[dict[str, Any]]:
+        """Stage A: return a list of dicts with keys summary/detail/occurred_at/tags.
+        ``context`` is optional read-only preceding text (sliding window) the model
+        should use for reference but NOT extract events from."""
         ...
 
     def judge_causality(self, cause: Event, effect: Event) -> dict[str, Any]:

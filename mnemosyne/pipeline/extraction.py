@@ -2,15 +2,25 @@
 
 Input: raw text (a chat turn, a log block, a doc). Output: zero or more Events, each
 embedded (summary + detail) and ready to be written to the graph + vector store.
+
+Large inputs are optionally chunked (see ``pipeline.chunking``) so the extraction call
+never overflows the model's context or truncates its output. Each chunk after the first
+gets the tail of the previous chunk as read-only context (a sliding window) so events
+that reference earlier text still resolve. Any duplicate events that slip across a
+boundary are collapsed later by Stage-C consolidation (near-duplicate → reinforced, not
+a second node) — the event-level analog of the design's L3 fuzzy-merge layer.
 """
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
+from ..config import Settings
 from ..interfaces import Embedder, LLMClient
 from ..models import Event
+from .chunking import chunk_text
 
 
 def _parse_dt(value: Any, fallback: datetime) -> datetime:
@@ -26,6 +36,38 @@ def _parse_dt(value: Any, fallback: datetime) -> datetime:
         return fallback
 
 
+def _extract_raw(
+    text: str, reference_time: datetime, llm: LLMClient, settings: Settings
+) -> list[dict[str, Any]]:
+    """Run the LLM extraction, chunking large inputs with a sliding-context window."""
+    if not settings.chunk_enabled or len(text) <= settings.chunk_max_chars:
+        return llm.extract_events(text, reference_time)
+
+    chunks = chunk_text(text, size=settings.chunk_size_chars)
+    ctx_n = max(settings.chunk_context_chars, 0)
+    jobs = [
+        (ch, (chunks[i - 1][-ctx_n:] if i > 0 and ctx_n else ""))
+        for i, ch in enumerate(chunks)
+    ]
+
+    def run(job: tuple[str, str]) -> list[dict[str, Any]]:
+        chunk, context = job
+        return llm.extract_events(chunk, reference_time, context=context)
+
+    workers = max(1, settings.chunk_max_concurrency)
+    if workers > 1 and len(jobs) > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(run, jobs))
+    else:
+        results = [run(job) for job in jobs]
+
+    raw: list[dict[str, Any]] = []
+    for r in results:
+        if r:
+            raw.extend(r)
+    return raw
+
+
 def extract_events(
     text: str,
     *,
@@ -33,8 +75,9 @@ def extract_events(
     reference_time: datetime,
     llm: LLMClient,
     embedder: Embedder,
+    settings: Settings,
 ) -> list[Event]:
-    raw_events = llm.extract_events(text, reference_time)
+    raw_events = _extract_raw(text, reference_time, llm, settings)
     learned_at = datetime.now(timezone.utc)
 
     events: list[Event] = []

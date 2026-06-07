@@ -34,6 +34,7 @@ def build_service() -> MnemosyneService:
             s.anthropic_api_key,
             extraction_model=s.extraction_model,
             judgment_model=s.judgment_model,
+            extraction_max_tokens=s.extraction_max_tokens,
         )
         if s.has_anthropic
         else None

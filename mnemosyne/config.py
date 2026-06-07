@@ -81,6 +81,18 @@ class Settings:
         default_factory=lambda: _s("JUDGMENT_MODEL", "claude-haiku-4-5-20251001")
     )
 
+    # --- Ingestion / large-file chunking (all optional, sane defaults) ---
+    extraction_max_tokens: int = field(default_factory=lambda: _i("EXTRACTION_MAX_TOKENS", 4096))
+    chunk_enabled: bool = field(default_factory=lambda: _b("CHUNK_ENABLED", True))
+    # Texts at or below this length are extracted in a single LLM call (no chunking).
+    chunk_max_chars: int = field(default_factory=lambda: _i("CHUNK_MAX_CHARS", 12000))
+    # Target size of each content chunk when chunking kicks in.
+    chunk_size_chars: int = field(default_factory=lambda: _i("CHUNK_SIZE_CHARS", 8000))
+    # Trailing chars of the previous chunk carried as read-only context (sliding window).
+    chunk_context_chars: int = field(default_factory=lambda: _i("CHUNK_CONTEXT_CHARS", 800))
+    # How many chunks to extract concurrently (1 = sequential).
+    chunk_max_concurrency: int = field(default_factory=lambda: _i("CHUNK_MAX_CONCURRENCY", 4))
+
     # --- Causal engine tuning ---
     confidence_threshold: float = field(default_factory=lambda: _f("CONFIDENCE_THRESHOLD", 0.55))
     temporal_tau_s: float = field(default_factory=lambda: _f("TEMPORAL_TAU_S", 1800.0))
