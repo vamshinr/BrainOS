@@ -2,7 +2,7 @@ import { BACKEND_URL } from "@/lib/backend";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 // Mnemosyne ingests raw text only. We read text files server-side and forward
 // the contents to /ingest. PDF/DOC parsing is intentionally not supported.
@@ -34,15 +34,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "File is empty" }, { status: 400 });
     }
 
-    const res = await fetch(`${BACKEND_URL}/ingest`, {
+    const res = await fetch(`${BACKEND_URL}/api/jobs/ingest`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, source_id: title ?? file.name }),
+      body: JSON.stringify({
+        text,
+        source_id: title ?? file.name,
+        title: title ?? file.name,
+        kind: "ingest_file",
+      }),
     });
     if (!res.ok) {
       throw new Error(`Mnemosyne ${res.status}: ${await res.text()}`);
     }
-    return NextResponse.json(await res.json());
+    return NextResponse.json(await res.json()); // { job_id }
   } catch (e) {
     console.error("File ingest error:", e);
     return NextResponse.json({ error: "File ingest failed", detail: String(e) }, { status: 500 });

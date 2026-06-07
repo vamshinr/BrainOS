@@ -3,11 +3,10 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
 
-// Mnemosyne ingests raw text and synchronously extracts events + infers causal
-// edges. The legacy {kind,title,url,model} fields are accepted but ignored —
-// only the text and an optional source label matter.
+// Enqueue an async ingestion job. Returns immediately with { job_id }; progress
+// is streamed to the QueueDock. The legacy {kind,url,model} fields are accepted
+// but ignored — only the text and an optional source label matter.
 const Body = z.object({
   content: z.string().min(1),
   title: z.string().optional(),
@@ -26,21 +25,20 @@ export async function POST(req: Request) {
   }
 
   try {
-    const res = await fetch(`${BACKEND_URL}/ingest`, {
+    const res = await fetch(`${BACKEND_URL}/api/jobs/ingest`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         text: body.content,
         source_id: body.source_id ?? body.title ?? "ui",
+        title: body.title ?? "",
+        kind: "ingest_text",
       }),
     });
-    if (!res.ok) {
-      throw new Error(`Mnemosyne ${res.status}: ${await res.text()}`);
-    }
-    // { events_created, events_reinforced, edges_created, counts }
-    return NextResponse.json(await res.json());
+    if (!res.ok) throw new Error(`Mnemosyne ${res.status}: ${await res.text()}`);
+    return NextResponse.json(await res.json()); // { job_id }
   } catch (e) {
-    console.error("Ingest error:", e);
-    return NextResponse.json({ error: "Ingest failed", detail: String(e) }, { status: 500 });
+    console.error("Enqueue error:", e);
+    return NextResponse.json({ error: "Enqueue failed", detail: String(e) }, { status: 500 });
   }
 }
