@@ -254,3 +254,6 @@ company_brain_architecture.svg
 implementation_plan.md
 walkthrough.md
 neo4j_smart_chunking.md
+
+# start.sh / stop.sh runtime logs
+.logs/

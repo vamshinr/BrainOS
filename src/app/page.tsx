@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import type { GraphDump, MnemEvent } from "@/lib/mnemosyne";
 
@@ -17,14 +17,33 @@ function fmtTime(iso: string): string {
 export default function Home() {
   const [data, setData] = useState<GraphDump | null>(null);
   const [loading, setLoading] = useState(true);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(() => {
+    setLoading(true);
     fetch("/api/graph")
       .then((r) => r.json())
       .then((d: GraphDump) => setData({ events: d.events ?? [], edges: d.edges ?? [] }))
       .catch(() => setData({ events: [], edges: [] }))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function doReset() {
+    setResetting(true);
+    try {
+      const res = await fetch("/api/reset", { method: "POST" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      load();
+    } catch {
+      // ignore — counts will reflect actual state on reload
+    } finally {
+      setResetting(false);
+      setConfirmReset(false);
+    }
+  }
 
   const events = data?.events ?? [];
   const edges = data?.edges ?? [];
@@ -34,16 +53,28 @@ export default function Home() {
 
   return (
     <div className="px-4 sm:px-6 md:px-10 py-6 md:py-10 max-w-3xl">
-      <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
-        Mnemosyne
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-[11px] uppercase tracking-widest text-[var(--muted-foreground)] mb-2">
+            Mnemosyne
+          </div>
+          <h1 className="text-3xl font-semibold tracking-tight">Causal memory engine.</h1>
+        </div>
+        <ResetControl
+          confirm={confirmReset}
+          resetting={resetting}
+          onAsk={() => setConfirmReset(true)}
+          onCancel={() => setConfirmReset(false)}
+          onConfirm={doReset}
+        />
       </div>
-      <h1 className="text-3xl font-semibold tracking-tight">Causal memory engine.</h1>
+
       <p className="mt-2 text-[var(--muted-foreground)] max-w-xl">
         Stores timestamped events and the directed cause → effect edges between them, then answers
         “why did X happen?” by walking the causal graph — not by returning a bag of similar chunks.
       </p>
 
-      <div className="mt-6 grid grid-cols-2 sm:grid-cols-2 gap-3 max-w-sm">
+      <div className="mt-6 grid grid-cols-2 gap-3 max-w-sm">
         <Stat label="Events" value={loading ? "…" : events.length} />
         <Stat label="Causal edges" value={loading ? "…" : edges.length} />
       </div>
@@ -82,6 +113,42 @@ export default function Home() {
           </ul>
         )}
       </div>
+    </div>
+  );
+}
+
+function ResetControl({
+  confirm, resetting, onAsk, onCancel, onConfirm,
+}: {
+  confirm: boolean;
+  resetting: boolean;
+  onAsk: () => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (!confirm) {
+    return (
+      <button
+        onClick={onAsk}
+        className="shrink-0 rounded-md border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 px-3 py-1.5 text-xs font-medium hover:bg-red-50 dark:hover:bg-red-950/30"
+      >
+        Reset memory
+      </button>
+    );
+  }
+  return (
+    <div className="shrink-0 flex items-center gap-2 rounded-md border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/30 px-2.5 py-1.5">
+      <span className="text-xs text-red-700 dark:text-red-300">Clear all events?</span>
+      <button
+        onClick={onConfirm}
+        disabled={resetting}
+        className="rounded bg-red-600 text-white px-2 py-0.5 text-xs font-medium disabled:opacity-50"
+      >
+        {resetting ? "Clearing…" : "Yes, wipe"}
+      </button>
+      <button onClick={onCancel} className="text-xs text-[var(--muted-foreground)] hover:underline">
+        Cancel
+      </button>
     </div>
   );
 }

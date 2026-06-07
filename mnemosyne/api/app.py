@@ -71,6 +71,12 @@ def edge(req: ManualEdgeRequest, svc: MnemosyneService = Depends(_service)):
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@app.post("/reset")
+def reset(svc: MnemosyneService = Depends(_service)):
+    """Clear all events + edges from every store (destructive)."""
+    return svc.reset()
+
+
 @app.get("/health")
 def health():
     try:

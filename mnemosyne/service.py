@@ -198,5 +198,14 @@ class MnemosyneService:
         status["embedding_dim"] = self.embedder.dim
         return status
 
+    def reset(self) -> dict[str, Any]:
+        """Clear ALL stored events + edges from both stores (this app namespace only:
+        the configured event label in Neo4j and the configured Qdrant collection)."""
+        events = len(self.graph.all_events())
+        edges = len(self.graph.all_edges())
+        self.graph.clear()
+        self.vector.clear()
+        return {"ok": True, "cleared": {"events": events, "edges": edges}}
+
     def close(self) -> None:
         self.graph.close()
