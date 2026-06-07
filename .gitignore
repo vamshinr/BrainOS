@@ -257,3 +257,4 @@ neo4j_smart_chunking.md
 
 # start.sh / stop.sh runtime logs
 .logs/
+examples/# AFTER INGEST — try these queries again.py

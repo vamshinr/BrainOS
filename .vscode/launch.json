@@ -8,9 +8,10 @@
       "module": "mnemosyne",
       "cwd": "${workspaceFolder}",
       "python": "${workspaceFolder}/mnemosyne/.venv/bin/python",
+      "envFile": "${workspaceFolder}/.env",
+      "env": { "PORT": "8090" },
       "console": "integratedTerminal",
-      "justMyCode": false,
-      "env": { "PORT": "8090" }
+      "justMyCode": false
     },
     {
       "name": "Mnemosyne API (uvicorn, no reload)",
@@ -20,17 +21,31 @@
       "args": ["mnemosyne.api.app:app", "--host", "0.0.0.0", "--port", "8090"],
       "cwd": "${workspaceFolder}",
       "python": "${workspaceFolder}/mnemosyne/.venv/bin/python",
+      "envFile": "${workspaceFolder}/.env",
       "console": "integratedTerminal",
       "justMyCode": false
     },
     {
-      "name": "Mnemosyne tests (pytest)",
+      "name": "Mnemosyne tests (all)",
       "type": "debugpy",
       "request": "launch",
       "module": "pytest",
       "args": ["mnemosyne/tests", "-v"],
       "cwd": "${workspaceFolder}",
       "python": "${workspaceFolder}/mnemosyne/.venv/bin/python",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Mnemosyne tests (current file)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["${file}", "-v", "-s"],
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/mnemosyne/.venv/bin/python",
+      "envFile": "${workspaceFolder}/.env",
       "console": "integratedTerminal",
       "justMyCode": false
     }
