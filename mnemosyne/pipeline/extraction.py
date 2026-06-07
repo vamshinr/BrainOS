@@ -37,13 +37,21 @@ def _parse_dt(value: Any, fallback: datetime) -> datetime:
 
 
 def _extract_raw(
-    text: str, reference_time: datetime, llm: LLMClient, settings: Settings
+    text: str,
+    reference_time: datetime,
+    llm: LLMClient,
+    settings: Settings,
+    on_progress=None,
 ) -> list[dict[str, Any]]:
     """Run the LLM extraction, chunking large inputs with a sliding-context window."""
     if not settings.chunk_enabled or len(text) <= settings.chunk_max_chars:
-        return llm.extract_events(text, reference_time)
+        result = llm.extract_events(text, reference_time)
+        if on_progress:
+            on_progress(1.0, "Extracting events")
+        return result
 
     chunks = chunk_text(text, size=settings.chunk_size_chars)
+    n = len(chunks)
     ctx_n = max(settings.chunk_context_chars, 0)
     jobs = [
         (ch, (chunks[i - 1][-ctx_n:] if i > 0 and ctx_n else ""))
@@ -54,17 +62,29 @@ def _extract_raw(
         chunk, context = job
         return llm.extract_events(chunk, reference_time, context=context)
 
+    raw: list[dict[str, Any]] = []
+    done = 0
+
+    def note(result: list[dict[str, Any]]) -> None:
+        nonlocal done
+        done += 1
+        if result:
+            raw.extend(result)
+        if on_progress:
+            on_progress(done / n, f"Extracting events (chunk {done}/{n})")
+
     workers = max(1, settings.chunk_max_concurrency)
     if workers > 1 and len(jobs) > 1:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            results = list(pool.map(run, jobs))
-    else:
-        results = [run(job) for job in jobs]
+        from concurrent.futures import as_completed
 
-    raw: list[dict[str, Any]] = []
-    for r in results:
-        if r:
-            raw.extend(r)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(run, job) for job in jobs]
+            for future in as_completed(futures):
+                note(future.result())
+    else:
+        for job in jobs:
+            note(run(job))
+
     return raw
 
 
@@ -76,8 +96,9 @@ def extract_events(
     llm: LLMClient,
     embedder: Embedder,
     settings: Settings,
+    on_progress=None,
 ) -> list[Event]:
-    raw_events = _extract_raw(text, reference_time, llm, settings)
+    raw_events = _extract_raw(text, reference_time, llm, settings, on_progress)
     learned_at = datetime.now(timezone.utc)
 
     events: list[Event] = []

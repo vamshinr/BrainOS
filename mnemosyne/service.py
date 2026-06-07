@@ -64,10 +64,17 @@ class MnemosyneService:
         *,
         source_id: str = "",
         reference_time: Optional[datetime] = None,
+        on_progress=None,
     ) -> dict[str, Any]:
         if self.llm is None:
             raise RuntimeError("ingest requires an Anthropic API key for event extraction")
+
+        def report(fraction: float, step: str) -> None:
+            if on_progress:
+                on_progress(fraction, step)
+
         ref = reference_time or datetime.now(timezone.utc)
+        report(0.05, "Extracting events")
         extracted = extract_events(
             text,
             source_id=source_id,
@@ -75,29 +82,34 @@ class MnemosyneService:
             llm=self.llm,
             embedder=self.embedder,
             settings=self.settings,
+            # Map extraction's 0..1 onto the 0.05..0.60 band of the whole job.
+            on_progress=(lambda f, step: report(0.05 + 0.55 * f, step)) if on_progress else None,
         )
 
         created: list[Event] = []
         reinforced: list[dict[str, Any]] = []
         edges_created: list[CausalEdge] = []
 
-        for ev in extracted:
+        report(0.60, "Inferring causal edges")
+        total = max(1, len(extracted))
+        for idx, ev in enumerate(extracted):
             dup_id = find_duplicate(ev, self.vector, self.graph, self.settings)
             if dup_id is not None:
                 count = reinforce(dup_id, self.graph, self.settings, now=ref)
                 reinforced.append({"event_id": dup_id, "reinforcement_count": count})
-                continue
+            else:
+                self.graph.add_event(ev)
+                self.vector.upsert(ev.id, ev.embedding or [], _vector_payload(ev))
+                created.append(ev)
 
-            self.graph.add_event(ev)
-            self.vector.upsert(ev.id, ev.embedding or [], _vector_payload(ev))
-            created.append(ev)
+                window_start = ev.occurred_at - timedelta(seconds=self.settings.temporal_max_window_s)
+                candidates = self.graph.candidate_causes(ev, window_start)
+                for edge in infer_edges(ev, candidates, settings=self.settings, llm=self.llm):
+                    self.graph.add_edge(edge)
+                    edges_created.append(edge)
+            report(0.60 + 0.35 * ((idx + 1) / total), "Inferring causal edges")
 
-            window_start = ev.occurred_at - timedelta(seconds=self.settings.temporal_max_window_s)
-            candidates = self.graph.candidate_causes(ev, window_start)
-            for edge in infer_edges(ev, candidates, settings=self.settings, llm=self.llm):
-                self.graph.add_edge(edge)
-                edges_created.append(edge)
-
+        report(1.0, "Done")
         return {
             "events_created": [e.id for e in created],
             "events_reinforced": reinforced,
