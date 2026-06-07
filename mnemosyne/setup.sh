@@ -55,7 +55,7 @@ try:
     g.verify(); g.close()
     print(f"   Neo4j      OK   ({s.neo4j_uri})")
 except Exception as e:
-    print(f"   Neo4j      DOWN/AUTH ({s.neo4j_uri}) -> set NEO4J_PASSWORD in mnemosyne/.env [{type(e).__name__}]")
+    print(f"   Neo4j      DOWN/AUTH ({s.neo4j_uri}) -> set NEO4J_PASSWORD in root .env [{type(e).__name__}]")
 print("   Anthropic  " + ("OK   (key set)" if s.has_anthropic else "MISSING -> set ANTHROPIC_API_KEY for /ingest"))
 PY
 )

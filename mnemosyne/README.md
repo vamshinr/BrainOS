@@ -10,8 +10,8 @@ chain.
 > linguistic association + an LLM judgment — **not** true causal inference. That is the
 > accepted practical tradeoff; the code says so where it matters.
 
-This is the revamped backend core. It is a self-contained package and does **not**
-replace the existing `src/python_backend` (which still serves the Next.js frontend).
+This is the backend core. The Next.js UI in `src/` runs entirely on it through the
+`src/app/api/*` adapter routes (the legacy `src/python_backend` has been removed).
 
 ## Architecture
 
@@ -57,27 +57,14 @@ is the demonstrable proof that causal traversal ignores keyword-similar noise.
 
 ## Setup & run
 
-**Native, one command** — `run.sh` bootstraps on first use (creates `mnemosyne/.venv`,
-installs deps, scaffolds `.env`, warms the embedding model, checks Neo4j + Qdrant), then
-serves on `:8090`:
+Config comes from the single root **`.env`** (set `NEO4J_PASSWORD` + `ANTHROPIC_API_KEY`).
 
-```bash
-cd mnemosyne
-./run.sh
-```
-
-Set `NEO4J_PASSWORD` and `ANTHROPIC_API_KEY` in `mnemosyne/.env` (the existing
-`src/python_backend/.env` Anthropic key is also picked up). Native mode expects a running
-Neo4j (`bolt://localhost:7687`) and Qdrant (`http://localhost:6333`); run `./setup.sh`
-alone to (re)check them.
-
-**Docker, one command** — best for a fresh machine; brings up Neo4j + Qdrant + the API
-together with no manual installs (and no Neo4j password dance):
-
-```bash
-cd mnemosyne
-ANTHROPIC_API_KEY=sk-ant-... docker compose up --build      # or: ./run.sh --docker
-```
+- **Whole stack** (Neo4j + Qdrant + this backend + the UI): `./scripts/start.sh` from the
+  repo root — see the [root README](../README.md).
+- **This backend only** (native): `mnemosyne/run.sh` — bootstraps `mnemosyne/.venv` on first
+  use, then serves `:8090`. Expects Neo4j (`bolt://localhost:7687`) + Qdrant
+  (`http://localhost:6333`) running; `./setup.sh` (re)checks them.
+- **Docker** (whole stack): `docker compose up --build` from the repo root.
 
 ## API examples
 

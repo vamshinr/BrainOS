@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Start the Mnemosyne API. Single entry point:
 #   ./run.sh            # native: bootstraps via setup.sh on first run, then serves :8090
-#   ./run.sh --docker   # full stack (Neo4j + Qdrant + API) via docker compose
+#   ./run.sh --docker   # full stack via the root docker-compose.yml
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,7 +11,7 @@ if [ "${1:-}" = "--docker" ]; then
   if ! command -v docker >/dev/null 2>&1; then
     echo "docker not found — install Docker Desktop, or run natively with ./run.sh"; exit 1
   fi
-  cd "$HERE"
+  cd "$REPO"
   exec docker compose up --build
 fi
 
