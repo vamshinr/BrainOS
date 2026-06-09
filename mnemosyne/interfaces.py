@@ -41,6 +41,11 @@ class VectorStore(Protocol):
 
     def clear(self) -> None: ...
 
+    def clear_all(self) -> None:
+        """Blanket wipe: delete all points from EVERY collection (not just the
+        configured one). Used by the destructive /reset endpoint."""
+        ...
+
 
 @runtime_checkable
 class GraphStore(Protocol):
@@ -81,6 +86,11 @@ class GraphStore(Protocol):
 
     # --- lifecycle ---
     def clear(self) -> None: ...
+
+    def clear_all(self) -> None:
+        """Blanket wipe: every node + relationship in the database, regardless of
+        label. Used by the destructive /reset endpoint."""
+        ...
 
     def close(self) -> None: ...
 

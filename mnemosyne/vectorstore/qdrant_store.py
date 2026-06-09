@@ -76,3 +76,11 @@ class QdrantVectorStore:
             collection_name=self._collection,
             points_selector=models.FilterSelector(filter=models.Filter()),
         )
+
+    def clear_all(self) -> None:
+        # Blanket wipe: delete all points from EVERY collection (schemas kept intact).
+        for c in self._client.get_collections().collections:
+            self._client.delete(
+                collection_name=c.name,
+                points_selector=models.FilterSelector(filter=models.Filter()),
+            )

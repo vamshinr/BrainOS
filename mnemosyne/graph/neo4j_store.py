@@ -227,3 +227,7 @@ class Neo4jGraphStore:
     def clear(self) -> None:
         # Scoped to this store's label only — never a blanket wipe.
         self._run(f"MATCH (e:{self._label}) DETACH DELETE e")
+
+    def clear_all(self) -> None:
+        # Blanket wipe: every node + relationship in the database, regardless of label.
+        self._run("MATCH (n) DETACH DELETE n")

@@ -212,12 +212,12 @@ class MnemosyneService:
         return status
 
     def reset(self) -> dict[str, Any]:
-        """Clear ALL stored events + edges from both stores (this app namespace only:
-        the configured event label in Neo4j and the configured Qdrant collection)."""
+        """Blanket-wipe BOTH stores: every node + relationship in Neo4j and every point
+        in all Qdrant collections (NOT namespace-scoped — destructive)."""
         events = len(self.graph.all_events())
         edges = len(self.graph.all_edges())
-        self.graph.clear()
-        self.vector.clear()
+        self.graph.clear_all()
+        self.vector.clear_all()
         return {"ok": True, "cleared": {"events": events, "edges": edges}}
 
     def close(self) -> None:
