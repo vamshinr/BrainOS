@@ -9,14 +9,9 @@ type NavItem = { href: string; label: string; hint: string };
 
 const BASE_NAV: NavItem[] = [
   { href: "/", label: "Brain", hint: "Overview" },
-  { href: "/ingest", label: "Ingest", hint: "Capture knowledge" },
-  // { href: "/failures", label: "Traps", hint: "Loop memory" },
-  { href: "/graph", label: "Map", hint: "Entities & links" },
-  // { href: "/conflicts", label: "Conflicts", hint: "Resolve disputed facts" },
-  { href: "/ask", label: "Ask", hint: "Query the brain" },
-  // { href: "/onboard", label: "Guide", hint: "Day-one onboarding generator" },
-  // { href: "/skills", label: "Skills", hint: "Export for agents" },
-  // { href: "/slack", label: "Slack", hint: "MCP integration" },
+  { href: "/ingest", label: "Ingest", hint: "Capture events" },
+  { href: "/graph", label: "Map", hint: "Events & causal edges" },
+  { href: "/ask", label: "Ask", hint: "Why did X happen?" },
 ];
 
 export function Nav() {
@@ -125,8 +120,8 @@ export function Nav() {
         <div className="shrink-0 pt-4 border-t border-[var(--border)] space-y-4">
           <ThemeToggle />
           <p className="text-[11px] text-[var(--muted-foreground)] leading-relaxed">
-            Atomic facts, reconciled when things change, served to your agents
-            with provenance on every claim.
+            Timestamped events linked by cause→effect edges. Ask why something
+            happened and get the causal chain, not keyword matches.
           </p>
         </div>
       </aside>

@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Brain OS",
   description:
-    "Reconciled memory infrastructure for AI agents. Extracts atomic, attributable facts from Slack, email, tickets and docs; supersedes them when things change; serves them to your agents with provenance on every claim.",
+    "Causal memory engine for AI agents. Stores timestamped events and directed cause→effect edges, then answers \"why did X happen?\" by walking the causal graph back to root cause and forward to consequences.",
   icons: {
     icon: [{ url: "/brainos-icon.svg", type: "image/svg+xml" }],
     shortcut: ["/brainos-icon.svg"],
