@@ -45,35 +45,50 @@ EXTRACTION_TOOL = {
     },
 }
 
-JUDGMENT_SYSTEM = """You judge whether one event causally CONTRIBUTED to another.
+JUDGMENT_SYSTEM = """You judge whether each candidate cause causally CONTRIBUTED to \
+ONE effect event.
 
 This is approximate causality (temporal precedence + association + your judgment), not \
-proof. Be conservative: if B would plausibly have happened regardless of A, say the \
-relation is "none" with low confidence.
+proof. Be conservative: if the effect would plausibly have happened regardless of a \
+candidate, mark that candidate "none" with low confidence. Judge every candidate \
+independently — do not let one strong cause inflate the others.
 
-relation:
-- "caused"    — A directly produced B
-- "triggered" — A set B in motion
-- "led_to"    — A contributed to B through a chain
-- "enabled"   — A made B possible but was not sufficient alone
-- "none"      — no causal contribution
+For EACH candidate (identified by its cause_id) emit:
+- relation:
+  - "caused"    — the candidate directly produced the effect
+  - "triggered" — the candidate set the effect in motion
+  - "led_to"    — the candidate contributed through a chain
+  - "enabled"   — the candidate made the effect possible but was not sufficient alone
+  - "none"      — no causal contribution
+- confidence: 0..1
+- justification: ONE sentence
 
-confidence: 0..1. justification: ONE sentence. Answer ONLY via the emit_judgment tool."""
+Answer ONLY via the emit_judgments tool, one entry per candidate cause_id."""
 
 JUDGMENT_TOOL = {
-    "name": "emit_judgment",
-    "description": "Emit the causal judgment for the candidate pair.",
+    "name": "emit_judgments",
+    "description": "Emit one causal judgment per candidate cause.",
     "input_schema": {
         "type": "object",
         "properties": {
-            "relation": {
-                "type": "string",
-                "enum": ["caused", "triggered", "led_to", "enabled", "none"],
-            },
-            "confidence": {"type": "number"},
-            "justification": {"type": "string"},
+            "judgments": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "cause_id": {"type": "string"},
+                        "relation": {
+                            "type": "string",
+                            "enum": ["caused", "triggered", "led_to", "enabled", "none"],
+                        },
+                        "confidence": {"type": "number"},
+                        "justification": {"type": "string"},
+                    },
+                    "required": ["cause_id", "relation", "confidence", "justification"],
+                },
+            }
         },
-        "required": ["relation", "confidence", "justification"],
+        "required": ["judgments"],
     },
 }
 

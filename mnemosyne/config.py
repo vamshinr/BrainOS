@@ -102,8 +102,10 @@ class Settings:
     temporal_tau_s: float = field(default_factory=lambda: _f("TEMPORAL_TAU_S", 1800.0))
     temporal_max_window_s: float = field(default_factory=lambda: _f("TEMPORAL_MAX_WINDOW_S", 21600.0))
     weight_temporal: float = field(default_factory=lambda: _f("WEIGHT_TEMPORAL", 0.3))
-    weight_linguistic: float = field(default_factory=lambda: _f("WEIGHT_LINGUISTIC", 0.2))
+    weight_association: float = field(default_factory=lambda: _f("WEIGHT_ASSOCIATION", 0.2))
     weight_llm: float = field(default_factory=lambda: _f("WEIGHT_LLM", 0.5))
+    # Candidates judged per ingested event (bounds the LLM cost to one call per event).
+    candidate_top_k: int = field(default_factory=lambda: _i("CANDIDATE_TOP_K", 5))
     dedup_similarity: float = field(default_factory=lambda: _f("DEDUP_SIMILARITY", 0.92))
     dedup_time_window_s: float = field(default_factory=lambda: _f("DEDUP_TIME_WINDOW_S", 3600.0))
     salience_half_life_s: float = field(default_factory=lambda: _f("SALIENCE_HALF_LIFE_S", 604800.0))

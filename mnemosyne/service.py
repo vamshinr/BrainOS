@@ -6,7 +6,7 @@ interfaces, never on Neo4j/Qdrant specifics.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from .config import Settings
@@ -102,9 +102,9 @@ class MnemosyneService:
                 self.vector.upsert(ev.id, ev.embedding or [], _vector_payload(ev))
                 created.append(ev)
 
-                window_start = ev.occurred_at - timedelta(seconds=self.settings.temporal_max_window_s)
-                candidates = self.graph.candidate_causes(ev, window_start)
-                for edge in infer_edges(ev, candidates, settings=self.settings, llm=self.llm):
+                for edge in infer_edges(
+                    ev, graph=self.graph, vector=self.vector, settings=self.settings, llm=self.llm
+                ):
                     self.graph.add_edge(edge)
                     edges_created.append(edge)
             report(0.60 + 0.35 * ((idx + 1) / total), "Inferring causal edges")

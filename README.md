@@ -5,7 +5,7 @@ semantically-similar chunks, BrainOS stores **timestamped events** and the direc
 **cause → effect edges** between them, then answers “why did X happen?” by walking the causal
 graph — back to the root cause, forward to the consequences.
 
-> Honest framing: this is *approximate* causality — temporal precedence + linguistic
+> Honest framing: this is *approximate* causality — temporal precedence + semantic
 > association + an LLM judgment — not true causal inference.
 
 ## Stack

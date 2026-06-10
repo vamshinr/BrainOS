@@ -202,20 +202,6 @@ class Neo4jGraphStore:
         )
         return [self._row_to_edge(row["r"]) for row in rows]
 
-    def candidate_causes(
-        self, effect: Event, window_start: datetime, exclude_ids: Optional[set[str]] = None
-    ) -> list[Event]:
-        rows = self._run(
-            f"MATCH (c:{self._label}) "
-            f"WHERE c.occurred_at >= $start AND c.occurred_at <= $end "
-            f"AND NOT c.id IN $exclude "
-            f"RETURN c ORDER BY c.occurred_at ASC",
-            start=window_start,
-            end=effect.occurred_at,
-            exclude=list((exclude_ids or set()) | {effect.id}),
-        )
-        return [self._row_to_event(row["c"]) for row in rows]
-
     def all_events(self) -> list[Event]:
         rows = self._run(f"MATCH (e:{self._label}) RETURN e ORDER BY e.occurred_at ASC")
         return [self._row_to_event(row["e"]) for row in rows]

@@ -73,13 +73,6 @@ class GraphStore(Protocol):
 
     def edges_for_event(self, event_id: str) -> list[CausalEdge]: ...
 
-    def candidate_causes(
-        self, effect: Event, window_start: datetime, exclude_ids: Optional[set[str]] = None
-    ) -> list[Event]:
-        """Events whose occurred_at is in [window_start, effect.occurred_at] (inclusive),
-        i.e. plausible causes by temporal precedence."""
-        ...
-
     def all_events(self) -> list[Event]: ...
 
     def all_edges(self) -> list[CausalEdge]: ...
@@ -105,8 +98,12 @@ class LLMClient(Protocol):
         should use for reference but NOT extract events from."""
         ...
 
-    def judge_causality(self, cause: Event, effect: Event) -> dict[str, Any]:
-        """Stage B signal 3: return {relation, confidence, justification}."""
+    def judge_causality_batch(
+        self, effect: Event, causes: list[Event]
+    ) -> list[dict[str, Any]]:
+        """Stage B signal 3, batched: judge every candidate cause for ONE effect in a
+        single call. Returns one dict per cause with keys
+        cause_id/relation/confidence/justification, in the same order as ``causes``."""
         ...
 
     def synthesize(self, query: str, ordered_chain: list[dict[str, Any]]) -> str:

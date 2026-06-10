@@ -7,7 +7,7 @@ directed **cause → effect edges** between them, then retrieves by *walking tho
 chain.
 
 > **Honest framing:** this is *approximate* causality — temporal precedence +
-> linguistic association + an LLM judgment — **not** true causal inference. That is the
+> semantic association + an LLM judgment — **not** true causal inference. That is the
 > accepted practical tradeoff; the code says so where it matters.
 
 This is the backend core. The Next.js UI in `src/` runs entirely on it through the
@@ -32,9 +32,11 @@ no in-memory stub).
   optionally chunked with a sliding-context window so the call never overflows or
   truncates (`CHUNK_*` / `EXTRACTION_MAX_TOKENS` env vars; small text stays a single call).
 - **Stage B — `causal.py`** — three-signal causal inference:
-  `confidence = 0.3·temporal + 0.2·linguistic + 0.5·llm`. Temporal precedence prunes
-  candidates cheaply; causality (`cause.occurred_at ≤ effect.occurred_at`) is a hard
-  invariant. Edges below `CONFIDENCE_THRESHOLD` (0.55) are stored but excluded from
+  `confidence = 0.3·temporal + 0.2·association + 0.5·llm`. Candidates are the top-K
+  (`CANDIDATE_TOP_K`) prior events by embedding cosine within the temporal window —
+  the cosine doubles as the association signal — and all K are judged in ONE batched
+  Haiku call per event, so LLM cost is O(events), not O(pairs). Temporal precedence
+  (`cause.occurred_at ≤ effect.occurred_at`) is a hard invariant. Edges below `CONFIDENCE_THRESHOLD` (0.55) are stored but excluded from
   default traversal.
 - **Stage C — `consolidation.py`** — near-duplicates reinforce an existing event
   (`reinforcement_count`) instead of duplicating; `salience` decays with age unless

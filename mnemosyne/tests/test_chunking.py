@@ -55,8 +55,11 @@ class _CapturingLLM:
         self.calls.append({"text": text, "context": context})
         return []
 
-    def judge_causality(self, cause, effect):
-        return {"relation": "none", "confidence": 0.0, "justification": ""}
+    def judge_causality_batch(self, effect, causes):
+        return [
+            {"cause_id": c.id, "relation": "none", "confidence": 0.0, "justification": ""}
+            for c in causes
+        ]
 
     def synthesize(self, query, chain):
         return ""

@@ -1,15 +1,17 @@
-"""Stage B — causal edge inference (the hard part).
+"""Stage B — causal edge inference.
 
 Three-signal scoring. We deliberately do NOT rely on the LLM alone, nor on heuristics
 alone — we combine:
 
   1. Temporal precedence + proximity. A cause must occur before the effect; the score
      decays with the time gap and prunes the candidate set cheaply.
-  2. Linguistic / co-occurrence cues. Explicit causal markers in the text plus shared
-     entities/tags raise the prior.
-  3. LLM causal judgment (Haiku) for the surviving pairs.
+  2. Semantic association. The cosine between the two events' embeddings, taken
+     directly from the candidate vector search — general across domains and languages,
+     no keyword lists.
+  3. LLM causal judgment (Haiku), batched: the top-K candidates for an effect are
+     judged in ONE call, so the LLM cost is O(events), not O(pairs).
 
-final confidence = 0.3*temporal + 0.2*linguistic + 0.5*llm (then tune).
+final confidence = weight_temporal*temporal + weight_association*association + weight_llm*llm.
 
 Honest note: this is *approximate* causality (temporal precedence + association + an
 LLM judgment), not true causal inference. That is the accepted practical tradeoff.
@@ -18,46 +20,20 @@ LLM judgment), not true causal inference. That is the accepted practical tradeof
 from __future__ import annotations
 
 import math
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any, Optional
 
 from ..config import Settings
-from ..interfaces import LLMClient
+from ..interfaces import GraphStore, LLMClient, VectorStore
 from ..models import (
     CAUSAL_RELATIONS,
     METHOD_BLEND,
+    METHOD_NO_LLM,
     RELATION_CAUSED,
     CausalEdge,
     Event,
     build_causal_edge,
 )
-
-# Explicit causal markers we look for in the effect's text.
-CAUSAL_MARKERS = [
-    "because",
-    "due to",
-    "caused",
-    "led to",
-    "leads to",
-    "triggered",
-    "as a result",
-    "resulted in",
-    "results in",
-    "consequently",
-    "thereby",
-    "which caused",
-    "so that",
-    "owing to",
-    "in response to",
-    "following the",
-    "after the",
-]
-
-
-def _jaccard(a: list[str], b: list[str]) -> float:
-    sa, sb = {t.lower() for t in a}, {t.lower() for t in b}
-    if not sa or not sb:
-        return 0.0
-    return len(sa & sb) / len(sa | sb)
 
 
 def temporal_score(
@@ -74,92 +50,116 @@ def temporal_score(
     return math.exp(-delta / tau_s)
 
 
-def linguistic_score(cause: Event, effect: Event) -> tuple[float, list[str]]:
-    """Signal 2. Marker presence in the effect text + entity/tag overlap. Returns
-    (score in 0..1, matched markers)."""
-    text = f"{effect.summary} {effect.detail}".lower()
-    hits = [m for m in CAUSAL_MARKERS if m in text]
-    marker = 0.5 if hits else 0.0
-    overlap = _jaccard(cause.tags, effect.tags)
-    score = marker + 0.5 * min(1.0, overlap * 2.0)
-    return min(1.0, score), hits
-
-
-def blend(temporal: float, linguistic: float, llm_conf: float, settings: Settings) -> float:
+def blend(temporal: float, association: float, llm_conf: float, settings: Settings) -> float:
     return (
         settings.weight_temporal * temporal
-        + settings.weight_linguistic * linguistic
+        + settings.weight_association * association
         + settings.weight_llm * llm_conf
     )
 
 
-def score_pair(
-    cause: Event,
-    effect: Event,
-    *,
-    settings: Settings,
-    llm: Optional[LLMClient] = None,
-) -> Optional[CausalEdge]:
-    """Score a single (cause, effect) candidate with all three signals and return a
-    CausalEdge, or None if the pair is pruned at the temporal stage.
+@dataclass
+class Candidate:
+    """A temporally-eligible prior event, with its two cheap signals precomputed."""
 
-    When ``llm`` is None (deterministic unit tests) the LLM signal is dropped and the
-    remaining two signals are renormalized.
-    """
-    t = temporal_score(
-        cause, effect, tau_s=settings.temporal_tau_s, max_window_s=settings.temporal_max_window_s
-    )
-    if t is None:
-        return None
+    cause: Event
+    temporal: float
+    association: float  # embedding cosine from the candidate vector search
 
-    ling, markers = linguistic_score(cause, effect)
 
-    if llm is not None:
-        judgment = llm.judge_causality(cause, effect)
-        relation = judgment.get("relation", RELATION_CAUSED)
-        llm_conf = float(judgment.get("confidence", 0.0) or 0.0)
-        justification = judgment.get("justification", "")
-        if relation not in CAUSAL_RELATIONS:  # "none" or unknown
-            relation = RELATION_CAUSED
-            # keep llm_conf (low) — the blend will likely fall below threshold
-        confidence = blend(t, ling, llm_conf, settings)
-        method = METHOD_BLEND
-        evidence = (
-            f"temporal={t:.2f}; linguistic={ling:.2f} markers={markers}; "
-            f"llm={llm_conf:.2f}: {justification}"
+def select_candidates(
+    effect: Event, graph: GraphStore, vector: VectorStore, settings: Settings
+) -> list[Candidate]:
+    """The top-K prior events most associated with ``effect``.
+
+    The vector search supplies both the candidate set and the association signal
+    (cosine); the temporal gate enforces precedence and the lookback window. Ranked
+    by temporal*association so the judge sees the strongest joint candidates."""
+    if not effect.embedding:
+        return []
+    k_search = max(settings.candidate_top_k * 4, 20)
+    candidates: list[Candidate] = []
+    for cause_id, cosine, _payload in vector.search(effect.embedding, k_search):
+        if cause_id == effect.id:
+            continue
+        cause = graph.get_event(cause_id)
+        if cause is None:
+            continue
+        t = temporal_score(
+            cause,
+            effect,
+            tau_s=settings.temporal_tau_s,
+            max_window_s=settings.temporal_max_window_s,
         )
-    else:
-        relation = RELATION_CAUSED
-        denom = settings.weight_temporal + settings.weight_linguistic or 1.0
-        confidence = (settings.weight_temporal * t + settings.weight_linguistic * ling) / denom
-        method = "temporal+linguistic"
-        evidence = f"temporal={t:.2f}; linguistic={ling:.2f} markers={markers} (no-LLM)"
-
-    return build_causal_edge(
-        cause,
-        effect,
-        relation=relation,
-        confidence=round(confidence, 4),
-        evidence=evidence,
-        method=method,
-    )
+        if t is None:  # cause after effect, or outside the lookback window
+            continue
+        # Clamp: cosine similarity of normalized embeddings can be slightly negative.
+        association = min(1.0, max(0.0, float(cosine)))
+        candidates.append(Candidate(cause=cause, temporal=t, association=association))
+    candidates.sort(key=lambda c: c.temporal * c.association, reverse=True)
+    return candidates[: settings.candidate_top_k]
 
 
 def infer_edges(
     effect: Event,
-    candidates: list[Event],
     *,
+    graph: GraphStore,
+    vector: VectorStore,
     settings: Settings,
     llm: Optional[LLMClient] = None,
 ) -> list[CausalEdge]:
-    """Score every candidate cause for ``effect`` and return the surviving edges.
-    All edges that survive temporal pruning are returned (including below-threshold
-    ones — they are stored but excluded from default traversal)."""
+    """Infer causal edges into ``effect``: select the top-K associated prior events,
+    judge them in ONE batched LLM call, and blend the three signals into confidence.
+
+    All selected candidates yield an edge (including below-threshold ones — they are
+    stored but excluded from default traversal). A judge failure degrades to the
+    temporal+association blend; it never crashes ingest. When ``llm`` is None
+    (deterministic tests) the remaining two signals are renormalized."""
+    candidates = select_candidates(effect, graph, vector, settings)
+    if not candidates:
+        return []
+
+    judgments: dict[str, dict[str, Any]] = {}
+    if llm is not None:
+        try:
+            for j in llm.judge_causality_batch(effect, [c.cause for c in candidates]):
+                judgments[str(j.get("cause_id", ""))] = j
+        except Exception:  # noqa: BLE001 — degrade, never crash ingest
+            judgments = {}
+
     edges: list[CausalEdge] = []
-    for cause in candidates:
-        if cause.id == effect.id:
-            continue
-        edge = score_pair(cause, effect, settings=settings, llm=llm)
-        if edge is not None:
-            edges.append(edge)
+    for c in candidates:
+        judgment = judgments.get(c.cause.id)
+        if judgment is not None:
+            relation = judgment.get("relation", RELATION_CAUSED)
+            llm_conf = float(judgment.get("confidence", 0.0) or 0.0)
+            if relation not in CAUSAL_RELATIONS:  # "none" or unknown
+                relation = RELATION_CAUSED
+                # keep llm_conf (low) — the blend will likely fall below threshold
+            confidence = blend(c.temporal, c.association, llm_conf, settings)
+            method = METHOD_BLEND
+            evidence = (
+                f"temporal={c.temporal:.2f}; association={c.association:.2f}; "
+                f"llm={llm_conf:.2f}: {judgment.get('justification', '')}"
+            )
+        else:
+            relation = RELATION_CAUSED
+            denom = (settings.weight_temporal + settings.weight_association) or 1.0
+            confidence = (
+                settings.weight_temporal * c.temporal
+                + settings.weight_association * c.association
+            ) / denom
+            method = METHOD_NO_LLM
+            evidence = f"temporal={c.temporal:.2f}; association={c.association:.2f} (no-LLM)"
+
+        edges.append(
+            build_causal_edge(
+                c.cause,
+                effect,
+                relation=relation,
+                confidence=round(confidence, 4),
+                evidence=evidence,
+                method=method,
+            )
+        )
     return edges

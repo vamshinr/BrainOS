@@ -19,8 +19,11 @@ class FakeLLM:
     def extract_events(self, text, reference_time, context=""):
         return [{"summary": f"event:{text[:8]}", "occurred_at": None, "tags": []}]
 
-    def judge_causality(self, cause, effect):
-        return {"relation": "caused", "confidence": 0.0, "justification": ""}
+    def judge_causality_batch(self, effect, causes):
+        return [
+            {"cause_id": c.id, "relation": "none", "confidence": 0.0, "justification": ""}
+            for c in causes
+        ]
 
     def synthesize(self, query, ordered_chain):
         return ""

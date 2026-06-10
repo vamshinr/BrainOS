@@ -1,5 +1,21 @@
 # Causal Scorer Rework Implementation Plan
 
+> **OUTCOME (2026-06-10): Implemented, with deliberate deviations.** The architecture
+> shipped as specced — embedding-cosine association from the candidate vector search,
+> top-K candidate selection, ONE batched judge call per ingested event, weighted blend —
+> but per an explicit product directive ("no stubs, no patches, no keyword searches"):
+> - The legacy keyword path (`CAUSAL_MARKERS`, `linguistic_score`, per-pair `score_pair`/
+>   `judge_causality`, the `SCORER=legacy` switch) was **deleted**, not preserved.
+> - No placeholder classes (`CrossEncoderCausal`, `LocalCausalModel`, `LearnedCalibrator`)
+>   were added; the config knobs that existed only to select them were dropped too.
+> - Everything lives in a rewritten `mnemosyne/pipeline/causal.py` (no separate
+>   signals/calibration/scoring modules — without the plugin seams there was nothing to
+>   separate). `weight_linguistic` was renamed `weight_association` (`WEIGHT_ASSOCIATION`).
+> - `GraphStore.candidate_causes` became dead and was removed from the interface and the
+>   Neo4j store. Tests: `test_causal_scoring.py` + `test_batch_judge.py` replace
+>   `test_causal_blend.py` + `test_linguistic_signal.py`.
+> Verified: 47 passed (incl. the live Anthropic end-to-end test), 1 destructive skip.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the brittle keyword "linguistic" signal with embedding-based association and bound the LLM cost to one batched judge call per ingested event, behind a pluggable signal pipeline with stubbed placeholders for a local causal model and a learned calibrator.

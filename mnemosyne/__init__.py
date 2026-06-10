@@ -4,7 +4,7 @@ The novel part is the *causal graph*: we store timestamped events and the direct
 cause->effect edges between them, then retrieve by walking those edges (root-cause
 backward, consequences forward) instead of returning a bag of similar chunks.
 
-Honest framing: this is *approximate* causality — temporal precedence + linguistic
+Honest framing: this is *approximate* causality — temporal precedence + semantic
 association + an LLM judgment — not true causal inference. That is the accepted
 practical tradeoff; see ``mnemosyne.pipeline.causal``.
 """

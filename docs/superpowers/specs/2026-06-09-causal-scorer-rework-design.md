@@ -1,7 +1,9 @@
 # Causal Scorer Rework — Design
 
 - **Date:** 2026-06-09
-- **Status:** Approved (design); pending implementation plan
+- **Status:** Implemented 2026-06-10, with deliberate deviations (see the note atop the
+  implementation plan): the keyword/legacy path was deleted rather than preserved, and no
+  `NotImplementedError` placeholders were added — per the directive to ship without stubs.
 - **Component:** Mnemosyne backend — `mnemosyne/pipeline/causal.py` and the inference path
 - **Context:** Core causal engine; Vector Space Day pitch ~Jun 11. Build the in-house
   "generalize + bound LLM cost" version now; stub interfaces for a local causal model and a

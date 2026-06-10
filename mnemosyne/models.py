@@ -30,8 +30,8 @@ RELATION_SUPERSEDES = "supersedes"
 CAUSAL_RELATIONS = {RELATION_CAUSED, RELATION_TRIGGERED, RELATION_LED_TO, RELATION_ENABLED}
 
 # How an edge's confidence was derived.
-METHOD_BLEND = "temporal+linguistic+llm"
-METHOD_LLM = "llm_judgment"
+METHOD_BLEND = "temporal+association+llm"
+METHOD_NO_LLM = "temporal+association"
 METHOD_MANUAL = "manual"
 
 
