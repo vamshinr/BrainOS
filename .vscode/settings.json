@@ -1,0 +1,4 @@
+{
+    "python-envs.terminal.autoActivationType": "off",
+    "python.terminal.activateEnvironment": false
+}
